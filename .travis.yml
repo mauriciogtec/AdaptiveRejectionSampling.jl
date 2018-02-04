@@ -7,3 +7,5 @@ before_install:
   - pip install --user codecov
 after_success:
   - codecov --file coverage/lcov.info --disable search
+after_success:
+  - julia -e 'cd(Pkg.dir("AdaptiveRejectionSampling")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(process_folder())'
