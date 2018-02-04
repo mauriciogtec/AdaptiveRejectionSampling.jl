@@ -3,3 +3,7 @@ julia:
   - 0.6.0
   - 0.6.1
   - 0.6.2
+before_install:
+  - pip install --user codecov
+after_success:
+  - codecov --file coverage/lcov.info --disable search

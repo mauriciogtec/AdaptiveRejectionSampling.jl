@@ -1,8 +1,8 @@
 [![Build Status](https://travis-ci.org/mauriciogtec/AdaptiveRejectionSampling.jl.svg?branch=master)](https://travis-ci.org/mauriciogtec/AdaptiveRejectionSampling.jl)
 
+[![Coverage Status](https://coveralls.io/repos/github/mauriciogtec/AdaptiveRejectionSampling.jl/badge.svg?branch=master)](https://coveralls.io/github/mauriciogtec/AdaptiveRejectionSampling.jl?branch=master)
+
 # AdaptiveRejectionSampling
-
-
 
 ```julia
 using AdaptiveRejectionSampling
@@ -26,7 +26,7 @@ sampler = RejectionSampler(f); # domain and max segment should be here
 ```
 
       0.155764 seconds (773.26 k allocations: 28.453 MiB, 3.92% gc time)
-    
+
 
 
 ```julia
