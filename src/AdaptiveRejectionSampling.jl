@@ -118,7 +118,7 @@ the density assigned to the point `x`.
 function eval_envelop(e::Envelop, x::Float64)
     # searchsortedfirst is the proper method for and ordered list
     pos = searchsortedfirst(e.cutpoints, x)
-    if pos == 1 || pos == length(e.cutpoints + 2)
+    if pos == 1 || pos == length(e.cutpoints) + 1
         return 0.0
     else
         a, b = e.lines[pos - 1].slope, e.lines[pos - 1].intercept
@@ -175,7 +175,7 @@ mutable struct RejectionSampler
             max_failed_rate::Float64 = 0.001
     ) = begin
         @assert support[1] < support[2] "invalid support, not an interval"
-        logf(x) = log(f(x) * float(support[1] <= x <= support[2]))
+        logf(x) = log(f(x))
         objective = Objective(logf)
         x1, x2 = init
         @assert x1 < x2 "cutpoints must be ordered"
@@ -198,7 +198,8 @@ mutable struct RejectionSampler
     ) = begin
         logf(x) = log(f(x))
         grad(x) = ForwardDiff.derivative(logf, x)
-        grid = search_range[1]:δ:search_range[2]
+        grid_lims = max(search_range[1], support[1]), min(search_range[2], support[2])
+        grid = grid_lims[1]:δ:grid_lims[2]
         i1, i2 = findfirst(grad.(grid) .> 0.), findfirst(grad.(grid) .< 0.)
         @assert (i1 > 0) &&  (i2 > 0) "couldn't find initial points, please provide them or change `search_range`"
         x1, x2 = grid[i1], grid[i2]
@@ -233,5 +234,4 @@ function run_sampler!(s::RejectionSampler, n::Int)
     end
     out
 end
-
 end #
