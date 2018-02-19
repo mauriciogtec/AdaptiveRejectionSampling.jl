@@ -118,9 +118,12 @@ the density assigned to the point `x`.
 function eval_envelop(e::Envelop, x::Float64)
     # searchsortedfirst is the proper method for and ordered list
     pos = searchsortedfirst(e.cutpoints, x)
-    @assert 1 < pos < length(e.cutpoints) + 2 "x is outside the specified density support"
-    a, b = e.lines[pos - 1].slope, e.lines[pos - 1].intercept
-    exp(a * x + b)
+    if pos == 1 || pos == length(e.cutpoints + 2)
+        return 0.0
+    else
+        a, b = e.lines[pos - 1].slope, e.lines[pos - 1].intercept
+        return exp(a * x + b)
+    end
 end
 
 # --------------------------------
@@ -168,11 +171,11 @@ mutable struct RejectionSampler
             f::Function,
             support::Tuple{Float64, Float64},
             init::Tuple{Float64, Float64};
-            max_segments::Int = 10,
+            max_segments::Int = 25,
             max_failed_rate::Float64 = 0.001
     ) = begin
         @assert support[1] < support[2] "invalid support, not an interval"
-        logf(x) = log(f(x))
+        logf(x) = log(f(x) * float(support[1] <= x <= support[2]))
         objective = Objective(logf)
         x1, x2 = init
         @assert x1 < x2 "cutpoints must be ordered"
