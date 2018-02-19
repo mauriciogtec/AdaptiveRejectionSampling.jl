@@ -9,7 +9,7 @@ using ForwardDiff # For automatic differentiation, no user nor approximate deriv
 using StatsBase # To include the basic sample from array function
 # ------------------------------
 export Line, Objective, Envelop, RejectionSampler # Structures/classes
-export run_sampler!, eval_envelop # Methods
+export run_sampler!, eval_envelop, add_segment! # Methods
 # ------------------------------
 
 """
@@ -57,7 +57,7 @@ mutable struct Envelop
     Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64}) = begin
         @assert issorted([l.slope for l in lines], rev = true) "line slopes must be decreasing"
         intersections = [intersection(lines[i], lines[i + 1]) for i in 1:(length(lines) - 1)]
-        cutpoints = [support[1]; intersections; cutpoints[2]]
+        cutpoints = [support[1]; intersections; support[2]]
         @assert issorted(cutpoints) "cutpoints must be ordered"
         @assert length(unique(cutpoints)) == length(cutpoints) "cutpoints can't have duplicates"
         weights = [exp_integral(l, cutpoints[i], cutpoints[i + 1]) for (i, l) in enumerate(lines)]
@@ -68,12 +68,12 @@ end
 
 
 """
-    add_line_segment!(e::Envelop, l::Line)
+    add_segment!(e::Envelop, l::Line)
 Adds a new line segment to an envelop based on the value of its slope (slopes must be decreasing
 always in the envelop). The cutpoints are automatically determined by intersecting the line with
 the adjacent lines.
 """
-function add_line_segment!(e::Envelop, l::Line)
+function add_segment!(e::Envelop, l::Line)
     # Find the position in sorted array with binary search
     pos = searchsortedfirst([-line.slope for line in e.lines], -l.slope)
     # Find the new cutpoints
@@ -87,29 +87,27 @@ function add_line_segment!(e::Envelop, l::Line)
     else
         new_cut1 = intersection(l, e.lines[pos - 1])
         new_cut2 = intersection(l, e.lines[pos])
-        splice!(e.cutpoints, pos, [cut1, cut2])
+        splice!(e.cutpoints, pos, [new_cut1, new_cut2])
         @assert issorted(e.cutpoints)  "incompatible line: resulting intersection points aren't sorted"
     end
     # Insert the new line
     insert!(e.lines, pos, l)
+    e.size += 1
     # Recompute weights (this could be done more efficiently in the future by updating the neccesary ones only)
     e.weights = [exp_integral(line, e.cutpoints[i], e.cutpoints[i + 1]) for (i, line) in enumerate(e.lines)]
 end
 
 """
-    sample(p::Envelop, n::Int)
-Samples `n` elements iid from the density defined by the envelop `e` with it's exponential weights.
+    sample_envelop(p::Envelop)
+Samples an element from the density defined by the envelop `e` with it's exponential weights.
 See [`Envelop`](@ref) for details.
 """
-function sample(e::Envelop, n::Int)
+function sample_envelop(e::Envelop)
     # Randomly select lines based on envelop weights
-    line_num = sample(1:e.size, weights(e.weights), n)
-    a = [l.slope for l in e.lines]
-    b = [l.intercept for l in e.lines]
-    # Generate random uniforms
-    u_list = rand(n)
+    i = sample(1:e.size, weights(e.weights))
+    a, b = e.lines[i].slope, e.lines[i].intercept
     # Use the inverse CDF method for sampling
-    [log(exp(-b[i])*u*e.weights[i]*a[i] + exp(a[i]*e.cutpoints[i]))/a[i] for (i, u) in zip(line_num, u_list)]
+    log(exp(-b) * rand() * e.weights[i] * a + exp(a * e.cutpoints[i])) / a
 end
 
 """
@@ -163,14 +161,17 @@ interval in which f has positive value, and zero elsewhere.
 mutable struct RejectionSampler
     objective::Objective
     envelop::Envelop
-
+    max_segments::Int
+    max_failed_rate::Float64
+    # Constructor when initial points are provided
     RejectionSampler(
             f::Function,
             support::Tuple{Float64, Float64},
             init::Tuple{Float64, Float64};
             max_segments::Int = 10,
-            max_failed_factor::Float64 = 0.001
+            max_failed_rate::Float64 = 0.001
     ) = begin
+        @assert support[1] < support[2] "invalid support, not an interval"
         logf(x) = log(f(x))
         objective = Objective(logf)
         x1, x2 = init
@@ -181,59 +182,48 @@ mutable struct RejectionSampler
         b1, b2 = objective.logf(x1) - a1 * x1, objective.logf(x2) - a2 * x2
         line1, line2 = Line(a1, b1), Line(a2, b2)
         envelop = Envelop([line1, line2], support)
-        new(objective, envelop)
+        new(objective, envelop, max_segments, max_failed_rate)
     end
 
+    # Constructor for greedy search of starting points
     RejectionSampler(
             f::Function,
             support::Tuple{Float64, Float64},
             δ::Float64 = 0.5;
-            max_search_steps::Int = 100,
+            search_range::Tuple{Float64, Float64} = (-10.0,10.0),
             kwargs...
     ) = begin
         logf(x) = log(f(x))
         grad(x) = ForwardDiff.derivative(logf, x)
-        x1, x2 = -δ, δ
-        i, j = 0, 0
-        while (grad(x1) <= 0 || grad(x2) >= 0)  && i < max_attempts
-            if grad(x1) <= 0
-                x1 -= δ
-            elsif grad(x2) >= 0
-                x2 -= δ
-            end
-            i += 1
-        end
-        while (grad(x1) <= 0 || grad(x2) >= 0)  && j < max_attempts
-            if grad(x1) <= 0
-                x1 += δ
-            elsif grad(x2) >= 0
-                x2 += δ
-            end
-            j += 1
-        end
-        @assert i != max_attempts && j != max_attempts "couldn't find initial points, please provide them or verify that f is logconcave"
-        RejectionSampler(f, (x1, x2); kwargs...)
+        grid = search_range[1]:δ:search_range[2]
+        i1, i2 = findfirst(grad.(grid) .> 0.), findfirst(grad.(grid) .< 0.)
+        println(i1, i2)
+        @assert (i1 > 0) &&  (i2 == 0) "couldn't find initial points, please provide them or change `search_range`"
+        x1, x2 = grid[i1], grid[i2]
+        RejectionSampler(f, support, (x1, x2); kwargs...)
     end
 end
 
 """
-
+    run_sampler!(sampler::RejectionSampler, n::Int)
+It draws `n` iid samples of the objective function of `sampler`, and at each iteration it adapts the envelop
+of `sampler` by adding new segments to its envelop.
 """
-function run_sampler!(sampler::RejectionSampler, n::Int)
+function run_sampler!(s::RejectionSampler, n::Int)
     i = 0
-    failed, max_failed = 0, trunc(Int, n / max_failed_factor)
+    failed, max_failed = 0, trunc(Int, n / s.max_failed_rate)
     out = zeros(n)
     while i < n
-        candidate = get_samples(sampler.envelop, 1)[1]
-        acceptance_ratio = exp(sampler.objective.logf(candidate)) / eval_envelop(sampler.envelop, candidate)
+        candidate = sample_envelop(s.envelop)
+        acceptance_ratio = exp(s.objective.logf(candidate)) / eval_envelop(s.envelop, candidate)
         if rand() < acceptance_ratio
             i += 1
             out[i] = candidate
         else
-            if length(sampler.envelop.lines) <= max_segments
-                a = sampler.objective.grad(candidate)
-                b = sampler.objective.logf(candidate) - a * candidate
-                add_line_segment!(sampler.envelop, Line(a, b))
+            if length(s.envelop.lines) <= s.max_segments
+                a = s.objective.grad(candidate)
+                b = s.objective.logf(candidate) - a * candidate
+                add_segment!(s.envelop, Line(a, b))
             end
             failed += 1
             @assert failed < max_failed "max_failed_factor reached"
