@@ -7,8 +7,8 @@ module AdaptiveRejectionSampling
 using ForwardDiff # For automatic differentiation, no user nor approximate derivatives
 using StatsBase # To include the basic sample from array function
 # ------------------------------
-export Line, Objective, Envelop, RejectionSampler
-export run_sampler!, eval_envelop
+export Line, Objective, Envelop, RejectionSampler # Structures/classes
+export run_sampler!, eval_envelop # Methods
 # ------------------------------
 
 """
@@ -32,7 +32,7 @@ end
 """
     exp_integral(l::Line, x1::Float64, x2::Float64)
 Computes the integral
-``LaTeX $$ \int_{x_1} ^ {x_2} \exp\{ax + b\} dx. $$``
+    ``LaTeX \int_{x_1} ^ {x_2} \exp\{ax + b\} dx. ``
 The resulting value is the weight assigned to the segment [x1, x2] in the envelop
 """
 function exp_integral(l::Line, x1::Float64, x2::Float64)
@@ -41,17 +41,19 @@ function exp_integral(l::Line, x1::Float64, x2::Float64)
 end
 
 """
-    Envelop(lines::Vector{Line})
-A piecewise linear function with k segments defined by the lines {L_1, ..., L_k} and cutpoints{c_1, ..., c_k+1}. A line L_k is active in the segment [c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@ref). The weighted integral over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
+    Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64})
+A piecewise linear function with k segments defined by the lines `L_1, ..., L_k` and cutpoints `c_1, ..., c_k+1` with `c1 = support[1]` and `c2 = support[2]`. A line L_k is active in the segment [c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@ref). The weighted integral over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
 """
 mutable struct Envelop
     lines::Vector{Line}
     cutpoints::Vector{Float64}
     weights::Vector{Float64}
     size::Int
-    Envelop(lines::Vector{Line}) = begin
+
+    Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64}) = begin
         @assert issorted([l.slope for l in lines], rev = true) "line slopes must be decreasing"
-        cutpoints = [intersection(lines[i], lines[i + 1]) for i in 1:(length(lines) - 1)]
+        intersections = [intersection(lines[i], lines[i + 1]) for i in 1:(length(lines) - 1)]
+        cutpoints = [support[1]; intersections; cutpoints[2]]
         @assert issorted(cutpoints) "cutpoints must be ordered"
         @assert length(unique(cutpoints)) == length(cutpoints) "cutpoints can't have duplicates"
         weights = [exp_integral(l, cutpoints[i], cutpoints[i + 1]) for (i, l) in enumerate(lines)]
@@ -108,16 +110,17 @@ end
 Eval point a point `x` in the piecewise linear function defined by `e`. Necessary for evaluating the density assigned to the point `x`.
 """
 function eval_envelop(e::Envelop, x::Float64)
+    # searchsortedfirst is the proper method for and ordered list
     pos = searchsortedfirst(e.cutpoints, x)
     @assert 1 < pos < length(e.cutpoints) + 2 "x is outside the specified density support"
-    a, b = p.lines[pos - 1].slope, p.lines[pos - 1].intercept
+    a, b = e.lines[pos - 1].slope, e.lines[pos - 1].intercept
     exp(a * x + b)
 end
 
 # --------------------------------
 
 """
-    Objective(logf::Function)
+    Objective(logf::Function, support:)
     Objective(logf::Function, grad::Function)
 Convenient structure to store the objective function to be sampled. It must receive the logarithm of f and not f directly. It uses automatic differentiation by default, but the user can provide the derivative optionally.
 """
@@ -125,6 +128,7 @@ struct Objective
     logf::Function
     grad::Function
     Objective(logf::Function) = begin
+        # Automatic differentiation
         grad(x) = ForwardDiff.derivative(logf, x)
         new(logf, grad)
     end
@@ -132,48 +136,65 @@ struct Objective
 end
 
 """
-Rejection Sampler
+    RejectionSampler(f::Function, support::Tuple{Float64, Float64}[ ,δ::Float64])
+    RejectionSampler(f::Function, support::Tuple{Float64, Float64}, init::Tuple{Float64, Float64})
+An adaptive rejection sampler to obtain iid samples from a logconcave function `f`, supported in the domain `support` = (support[1], support[2]). To create the object, two initial points `init = init[1], init[2]` such that `loff'(init[1]) > 0` and `logf'(init[2]) < 0` are necessary. If they are not provided, the constructor will perform a greedy search based on `δ`.
+
+ The argument `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the interval in which f has positive value, and zero elsewhere.
+
+## Keyword arguments
+- `max_segments::Int = 10` : max size of envelop, the rejection-rate is usually slow with a small number of segments
+- `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate exceeding this value
 """
 mutable struct RejectionSampler
     objective::Objective
     envelop::Envelop
-    support::Tuple{Float64, Float64}
+
     RejectionSampler(
             f::Function,
             support::Tuple{Float64, Float64},
-            init_cutpoints::Tuple{Float64, Float64};
-            max_segments::Int64 = 25,
-            max_failed_factor::Float64 = 0.01
-        )  = begin #x1 and x2 should be auto
+            init::Tuple{Float64, Float64};
+            max_segments::Int = 10,
+            max_failed_factor::Float64 = 0.001
+    ) = begin
         logf(x) = log(f(x))
         objective = Objective(logf)
-        x1, x2 = init_cutpoints
+        x1, x2 = init
         @assert x1 < x2 "cutpoints must be ordered"
-        @assert support[1] < x1 && x2 < support[2] "cutpoints are outside support"
         a1, a2 = objective.grad(x1), objective.grad(x2)
         @assert a1 >= 0 "logf must have positive slope at initial cutpoint 1"
         @assert a2 <= 0 "logf must have negative slope at initial cutpoint 2"
         b1, b2 = objective.logf(x1) - a1 * x1, objective.logf(x2) - a2 * x2
         line1, line2 = Line(a1, b1), Line(a2, b2)
-        envelop = Envelop([line1, line2])
-        new(objective, envelop, support)
+        envelop = Envelop([line1, line2], support)
+        new(objective, envelop)
     end
+
     RejectionSampler(
             f::Function,
             support::Tuple{Float64, Float64},
             δ::Float64 = 0.5;
             max_search_steps::Int = 100,
-            kwargs...)
+            kwargs...
+    ) = begin
         logf(x) = log(f(x))
         grad(x) = ForwardDiff.derivative(logf, x)
         x1, x2 = -δ, δ
         i, j = 0, 0
-        while grad(x1) <= 0 && i < max_attempts
-            x1 -= δ
+        while (grad(x1) <= 0 || grad(x2) >= 0)  && i < max_attempts
+            if grad(x1) <= 0
+                x1 -= δ
+            elsif grad(x2) >= 0
+                x2 -= δ
+            end
             i += 1
         end
-        while grad(x2) >= 0 && j < max_attempts
-            x2 += δ
+        while (grad(x1) <= 0 || grad(x2) >= 0)  && j < max_attempts
+            if grad(x1) <= 0
+                x1 += δ
+            elsif grad(x2) >= 0
+                x2 += δ
+            end
             j += 1
         end
         @assert i != max_attempts && j != max_attempts "couldn't find initial points, please provide them or verify that f is logconcave"
@@ -181,6 +202,9 @@ mutable struct RejectionSampler
     end
 end
 
+"""
+
+"""
 function run_sampler!(sampler::RejectionSampler, n::Int)
     i = 0
     failed, max_failed = 0, trunc(Int, n / max_failed_factor)
