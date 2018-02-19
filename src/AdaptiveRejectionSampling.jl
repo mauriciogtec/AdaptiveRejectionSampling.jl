@@ -1,6 +1,7 @@
 
 """
-A log conconcave function is majorized with a piecewise envelop, which on the original scale is piecewise exponential. As the resulting extremely precise envelop adapts, the rejection rate dramatically decreases.
+A log conconcave function is majorized with a piecewise envelop, which on the original scale is piecewise
+exponential. As the resulting extremely precise envelop adapts, the rejection rate dramatically decreases.
 """
 module AdaptiveRejectionSampling
 # ------------------------------
@@ -42,7 +43,10 @@ end
 
 """
     Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64})
-A piecewise linear function with k segments defined by the lines `L_1, ..., L_k` and cutpoints `c_1, ..., c_k+1` with `c1 = support[1]` and `c2 = support[2]`. A line L_k is active in the segment [c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@ref). The weighted integral over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
+A piecewise linear function with k segments defined by the lines `L_1, ..., L_k` and cutpoints
+`c_1, ..., c_k+1` with `c1 = support[1]` and `c2 = support[2]`. A line L_k is active in the segment
+[c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@ref). The weighted integral
+over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
 """
 mutable struct Envelop
     lines::Vector{Line}
@@ -65,7 +69,9 @@ end
 
 """
     add_line_segment!(e::Envelop, l::Line)
-Adds a new line segment to an envelop based on the value of its slope (slopes must be decreasing always in the envelop). The cutpoints are automatically determined by intersecting the line with the adjacent lines.
+Adds a new line segment to an envelop based on the value of its slope (slopes must be decreasing
+always in the envelop). The cutpoints are automatically determined by intersecting the line with
+the adjacent lines.
 """
 function add_line_segment!(e::Envelop, l::Line)
     # Find the position in sorted array with binary search
@@ -92,7 +98,8 @@ end
 
 """
     sample(p::Envelop, n::Int)
-Samples `n` elements iid from the density defined by the envelop `e` with it's exponential weights. See [`Envelop`](@ref) for details.
+Samples `n` elements iid from the density defined by the envelop `e` with it's exponential weights.
+See [`Envelop`](@ref) for details.
 """
 function sample(e::Envelop, n::Int)
     # Randomly select lines based on envelop weights
@@ -107,7 +114,8 @@ end
 
 """
     eval_envelop(e::Envelop, x::Float64)
-Eval point a point `x` in the piecewise linear function defined by `e`. Necessary for evaluating the density assigned to the point `x`.
+Eval point a point `x` in the piecewise linear function defined by `e`. Necessary for evaluating
+the density assigned to the point `x`.
 """
 function eval_envelop(e::Envelop, x::Float64)
     # searchsortedfirst is the proper method for and ordered list
@@ -122,7 +130,8 @@ end
 """
     Objective(logf::Function, support:)
     Objective(logf::Function, grad::Function)
-Convenient structure to store the objective function to be sampled. It must receive the logarithm of f and not f directly. It uses automatic differentiation by default, but the user can provide the derivative optionally.
+Convenient structure to store the objective function to be sampled. It must receive the logarithm of
+f and not f directly. It uses automatic differentiation by default, but the user can provide the derivative optionally.
 """
 struct Objective
     logf::Function
@@ -138,13 +147,18 @@ end
 """
     RejectionSampler(f::Function, support::Tuple{Float64, Float64}[ ,δ::Float64])
     RejectionSampler(f::Function, support::Tuple{Float64, Float64}, init::Tuple{Float64, Float64})
-An adaptive rejection sampler to obtain iid samples from a logconcave function `f`, supported in the domain `support` = (support[1], support[2]). To create the object, two initial points `init = init[1], init[2]` such that `loff'(init[1]) > 0` and `logf'(init[2]) < 0` are necessary. If they are not provided, the constructor will perform a greedy search based on `δ`.
+An adaptive rejection sampler to obtain iid samples from a logconcave function `f`, supported in the
+domain `support` = (support[1], support[2]). To create the object, two initial points `init = init[1], init[2]`
+such that `loff'(init[1]) > 0` and `logf'(init[2]) < 0` are necessary. If they are not provided, the constructor
+will perform a greedy search based on `δ`.
 
- The argument `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the interval in which f has positive value, and zero elsewhere.
+The argument `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the
+interval in which f has positive value, and zero elsewhere.
 
 ## Keyword arguments
 - `max_segments::Int = 10` : max size of envelop, the rejection-rate is usually slow with a small number of segments
-- `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate exceeding this value
+- `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate
+    exceeding this value
 """
 mutable struct RejectionSampler
     objective::Objective
