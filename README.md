@@ -1,7 +1,11 @@
 [![Build Status](https://travis-ci.org/mauriciogtec/AdaptiveRejectionSampling.jl.svg?branch=master)](https://travis-ci.org/mauriciogtec/AdaptiveRejectionSampling.jl)
-[![MIT Licence](https://badges.frapsoft.com/os/mit/mit.png?v=103)](https://opensource.org/licenses/mit-license.php)
+[![AdaptiveRejectionSampling](http://pkg.julialang.org/badges/AdaptiveRejectionSampling_0.6.svg)](http://pkg.julialang.org/detail/AdaptiveRejectionSampling)
+[![AdaptiveRejectionSampling](http://pkg.julialang.org/badges/AdaptiveRejectionSampling_0.7.svg)](http://pkg.julialang.org/detail/AdaptiveRejectionSampling)
+
 [![Coverage Status](https://coveralls.io/repos/github/mauriciogtec/AdaptiveRejectionSampling.jl/badge.svg?branch=master)](https://coveralls.io/github/mauriciogtec/AdaptiveRejectionSampling.jl?branch=master)
 [![codecov](https://codecov.io/gh/mauriciogtec/AdaptiveRejectionSampling.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/mauriciogtec/AdaptiveRejectionSampling.jl)
+
+[![MIT Licence](https://badges.frapsoft.com/os/mit/mit.png?v=103)](https://opensource.org/licenses/mit-license.php)
 
 # AdaptiveRejectionSampling
 
