@@ -197,8 +197,7 @@ mutable struct RejectionSampler
         grad(x) = ForwardDiff.derivative(logf, x)
         grid = search_range[1]:δ:search_range[2]
         i1, i2 = findfirst(grad.(grid) .> 0.), findfirst(grad.(grid) .< 0.)
-        println(i1, i2)
-        @assert (i1 > 0) &&  (i2 == 0) "couldn't find initial points, please provide them or change `search_range`"
+        @assert (i1 > 0) &&  (i2 > 0) "couldn't find initial points, please provide them or change `search_range`"
         x1, x2 = grid[i1], grid[i2]
         RejectionSampler(f, support, (x1, x2); kwargs...)
     end
