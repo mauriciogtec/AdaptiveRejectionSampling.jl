@@ -9,7 +9,7 @@ using ForwardDiff # For automatic differentiation, no user nor approximate deriv
 using StatsBase # To include the basic sample from array function
 # ------------------------------
 export Line, Objective, Envelop, RejectionSampler # Structures/classes
-export run_sampler!, eval_envelop, add_segment! # Methods
+export run_sampler!, sample_envelop, eval_envelop, add_segment! # Methods
 # ------------------------------
 
 """
@@ -45,7 +45,7 @@ end
     Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64})
 A piecewise linear function with k segments defined by the lines `L_1, ..., L_k` and cutpoints
 `c_1, ..., c_k+1` with `c1 = support[1]` and `c2 = support[2]`. A line L_k is active in the segment
-[c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@ref). The weighted integral
+[c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@exp_integral). The weighted integral
 over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
 """
 mutable struct Envelop
@@ -100,7 +100,7 @@ end
 """
     sample_envelop(p::Envelop)
 Samples an element from the density defined by the envelop `e` with it's exponential weights.
-See [`Envelop`](@ref) for details.
+See [`Envelop`](@Envelop) for details.
 """
 function sample_envelop(e::Envelop)
     # Randomly select lines based on envelop weights
