@@ -27,13 +27,13 @@ Finds the horizontal coordinate of the intersection between lines
 """
 function intersection(l1::Line, l2::Line)
     @assert l1.slope != l2.slope "slopes should be different"
-     - (l2.intercept - l1.intercept) / (l2.slope - l1.slope)
+    - (l2.intercept - l1.intercept) / (l2.slope - l1.slope)
 end
 
 """
     exp_integral(l::Line, x1::Float64, x2::Float64)
 Computes the integral
-    ``LaTeX \int_{x_1} ^ {x_2} \exp\{ax + b\} dx. ``
+    ``LaTeX \\int_{x_1} ^ {x_2} \\exp\\{ax + b\\} dx. ``
 The resulting value is the weight assigned to the segment [x1, x2] in the envelop
 """
 function exp_integral(l::Line, x1::Float64, x2::Float64)
@@ -50,8 +50,8 @@ over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
 """
 mutable struct Envelop
     lines::Vector{Line}
-    cutpoints::Vector{Float64}
-    weights::Vector{Float64}
+    cutpoints::AbstractVector{Float64}
+    weights::AbstractVector{Float64}
     size::Int
 
     Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64}) = begin
@@ -161,7 +161,7 @@ interval in which f has positive value, and zero elsewhere.
 - `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate
     exceeding this value
 """
-mutable struct RejectionSampler
+struct RejectionSampler
     objective::Objective
     envelop::Envelop
     max_segments::Int
@@ -201,7 +201,7 @@ mutable struct RejectionSampler
         grid_lims = max(search_range[1], support[1]), min(search_range[2], support[2])
         grid = grid_lims[1]:δ:grid_lims[2]
         i1, i2 = findfirst(grad.(grid) .> 0.), findfirst(grad.(grid) .< 0.)
-        @assert (i1 > 0) &&  (i2 > 0) "couldn't find initial points, please provide them or change `search_range`"
+        @assert (i1 != nothing) &&  (i2 != nothing) "couldn't find initial points, please provide them or change `search_range`"
         x1, x2 = grid[i1], grid[i2]
         RejectionSampler(f, support, (x1, x2); kwargs...)
     end
