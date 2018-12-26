@@ -1,7 +1,7 @@
 import AdaptiveRejectionSampling
 ars = AdaptiveRejectionSampling
 
-using Base.Test
+using Test
 
 @testset "Line" begin
     @test ars.Line(2.0, 3) isa ars.Line
