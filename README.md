@@ -6,6 +6,8 @@
 
 # AdaptiveRejectionSampling
 
+This package is useful for efficientlysampling from log-concave univariate density functions.
+
 
 ```julia
 using AdaptiveRejectionSampling
