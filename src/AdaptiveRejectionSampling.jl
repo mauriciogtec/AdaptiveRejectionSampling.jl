@@ -5,6 +5,8 @@ exponential. As the resulting extremely precise envelop adapts, the rejection ra
 """
 module AdaptiveRejectionSampling
 # ------------------------------
+using Random # Random stdlib
+# ------------------------------
 using ForwardDiff # For automatic differentiation, no user nor approximate derivatives
 using StatsBase # To include the basic sample from array function
 # ------------------------------
@@ -98,17 +100,23 @@ function add_segment!(e::Envelop, l::Line)
 end
 
 """
-    sample_envelop(p::Envelop)
+    sample_envelop(rng::AbstractRNG, e::Envelop)
+    sample_envelop(e::Envelop)
 Samples an element from the density defined by the envelop `e` with it's exponential weights.
 See [`Envelop`](@Envelop) for details.
 """
-function sample_envelop(e::Envelop)
+function sample_envelop(rng::AbstractRNG, e::Envelop)
     # Randomly select lines based on envelop weights
-    i = sample(1:e.size, weights(e.weights))
+    i = sample(rng, 1:e.size, weights(e.weights))
     a, b = e.lines[i].slope, e.lines[i].intercept
     # Use the inverse CDF method for sampling
-    log(exp(-b) * rand() * e.weights[i] * a + exp(a * e.cutpoints[i])) / a
+    log(exp(-b) * rand(rng) * e.weights[i] * a + exp(a * e.cutpoints[i])) / a
 end
+
+function sample_envelop(e::Envelop)
+    sample_envelop(Random.GLOBAL_RNG, e)
+end
+
 
 """
     eval_envelop(e::Envelop, x::Float64)
@@ -208,18 +216,19 @@ struct RejectionSampler
 end
 
 """
+    run_sampler!(rng::AbstractRNG, sampler::RejectionSampler, n::Int)
     run_sampler!(sampler::RejectionSampler, n::Int)
 It draws `n` iid samples of the objective function of `sampler`, and at each iteration it adapts the envelop
 of `sampler` by adding new segments to its envelop.
 """
-function run_sampler!(s::RejectionSampler, n::Int)
+function run_sampler!(rng::AbstractRNG, s::RejectionSampler, n::Int)
     i = 0
     failed, max_failed = 0, trunc(Int, n / s.max_failed_rate)
     out = zeros(n)
     while i < n
-        candidate = sample_envelop(s.envelop)
+        candidate = sample_envelop(rng, s.envelop)
         acceptance_ratio = exp(s.objective.logf(candidate)) / eval_envelop(s.envelop, candidate)
-        if rand() < acceptance_ratio
+        if rand(rng) < acceptance_ratio
             i += 1
             out[i] = candidate
         else
@@ -234,4 +243,8 @@ function run_sampler!(s::RejectionSampler, n::Int)
     end
     out
 end
-end #
+
+function run_sampler!(s::RejectionSampler, n::Int)
+    run_sampler!(Random.GLOBAL_RNG, s, n)
+end
+end # module AdaptiveRejectionSampling
