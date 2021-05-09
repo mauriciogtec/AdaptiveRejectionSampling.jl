@@ -131,3 +131,15 @@ plot!(x, [target envelop], width = 2, label = ["target density" "envelop"])
 ```
 
 ![](img/example4.png)
+
+To cite please use
+
+```bibtex
+@manual{tec2018ars,
+  title = {AdaptiveRejectionSampling.jl},
+  author = {Mauricio Tec},
+  year = {2018},
+  url = {https://github.com/mauriciogtec/AdaptiveRejectionSampling.jl}
+}
+```
+
