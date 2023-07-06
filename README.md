@@ -106,7 +106,7 @@ plot!(x, [target envelop], width = 2, label = ["target density" "envelop"])
 
 ![](img/example3.png)
 
-### Elastic Net Eistribution
+### Elastic Net Distribution
 
 The following example arises from elastic net regression and smoothing problems. In these cases, the integration constants are not available analytically.
 
@@ -135,7 +135,7 @@ plot!(x, [target envelop], width = 2, label = ["target density" "envelop"])
 
 ![](img/example4.png)
 
-### Tips for numerical stability
+### Tips for numerical stability, use of logdensity
 
 Here are some tips:
 
@@ -162,12 +162,7 @@ theta = 1.0
 # a complicated logdensity
 logf(v) = n * v - (n - k * alpha) * logsumexp([v, log(tau)]) - theta / alpha * ( (tau + exp(v) )^alpha )
 
-# make two plots of logf and f
-p1 = plot(logf, -20, 20, label = "logf")
-p2 = plot(x -> exp(logf(x)), -20, 20, label = "f")
-plot(p1, p2, layout = (1, 2))
-
-# runs sampler
+# run sampler
 δ = 0.1
 support = (-Inf, Inf)
 search = (0.0, 10.0)
