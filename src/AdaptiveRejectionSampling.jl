@@ -7,8 +7,8 @@ module AdaptiveRejectionSampling
 # ------------------------------
 using Random # Random stdlib
 # ------------------------------
-using ForwardDiff # For automatic differentiation, no user nor approximate derivatives
-using StatsBase # To include the basic sample from array function
+import ForwardDiff: derivative 
+import StatsBase: sample, weights
 # ------------------------------
 export Line, Objective, Envelop, RejectionSampler # Structures/classes
 export run_sampler!, sample_envelop, eval_envelop, add_segment! # Methods
@@ -29,7 +29,7 @@ Finds the horizontal coordinate of the intersection between lines
 """
 function intersection(l1::Line, l2::Line)
     @assert l1.slope != l2.slope "slopes should be different"
-    - (l2.intercept - l1.intercept) / (l2.slope - l1.slope)
+    -(l2.intercept - l1.intercept) / (l2.slope - l1.slope)
 end
 
 """
@@ -38,9 +38,19 @@ Computes the integral
     ``LaTeX \\int_{x_1} ^ {x_2} \\exp\\{ax + b\\} dx. ``
 The resulting value is the weight assigned to the segment [x1, x2] in the envelop
 """
-function exp_integral(l::Line, x1::Float64, x2::Float64)
+@inline function exp_integral(l::Line, x1::Float64, x2::Float64)
     a, b = l.slope, l.intercept
-    exp(b) * (exp(a * x2) - exp(a * x1)) / a
+    v1, v2 = a*x1, a*x2
+    if v1 > 25.0 || v2 > 25.0 || a == 0.0 || b > 25.0
+        @warn "exp_integral: numerical instability, truncating, check for under/overflow, consider truncating logf"
+        v1 = min(v1, 25.0)
+        v2 = min(v2, 25.0)
+        b = min(b, 25.0)
+        if a == 0
+            a = (v2 - v1) * 1e-6
+        end
+    end
+    exp(b) * (exp(v2) - exp(v1)) / a
 end
 
 """
@@ -56,13 +66,13 @@ mutable struct Envelop
     weights::AbstractVector{Float64}
     size::Int
 
-    Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64}) = begin
-        @assert issorted([l.slope for l in lines], rev = true) "line slopes must be decreasing"
-        intersections = [intersection(lines[i], lines[i + 1]) for i in 1:(length(lines) - 1)]
+    Envelop(lines::Vector{Line}, support::Tuple{Float64,Float64}) = begin
+        @assert issorted([l.slope for l in lines], rev=true) "line slopes must be decreasing"
+        intersections = [intersection(lines[i], lines[i+1]) for i in 1:(length(lines)-1)]
         cutpoints = [support[1]; intersections; support[2]]
         @assert issorted(cutpoints) "cutpoints must be ordered"
         @assert length(unique(cutpoints)) == length(cutpoints) "cutpoints can't have duplicates"
-        weights = [exp_integral(l, cutpoints[i], cutpoints[i + 1]) for (i, l) in enumerate(lines)]
+        weights = [exp_integral(l, cutpoints[i], cutpoints[i+1]) for (i, l) in enumerate(lines)]
         @assert Inf ∉ weights "Overflow in assigning weights"
         new(lines, cutpoints, weights, length(lines))
     end
@@ -84,19 +94,19 @@ function add_segment!(e::Envelop, l::Line)
         # Insert in second position, first one is the support bound
         insert!(e.cutpoints, pos + 1, new_cut)
     elseif pos == e.size + 1
-        new_cut = intersection(l, e.lines[pos - 1])
+        new_cut = intersection(l, e.lines[pos-1])
         insert!(e.cutpoints, pos, new_cut)
     else
-        new_cut1 = intersection(l, e.lines[pos - 1])
+        new_cut1 = intersection(l, e.lines[pos-1])
         new_cut2 = intersection(l, e.lines[pos])
         splice!(e.cutpoints, pos, [new_cut1, new_cut2])
-        @assert issorted(e.cutpoints)  "incompatible line: resulting intersection points aren't sorted"
+        @assert issorted(e.cutpoints) "incompatible line: resulting intersection points aren't sorted"
     end
     # Insert the new line
     insert!(e.lines, pos, l)
     e.size += 1
     # Recompute weights (this could be done more efficiently in the future by updating the neccesary ones only)
-    e.weights = [exp_integral(line, e.cutpoints[i], e.cutpoints[i + 1]) for (i, line) in enumerate(e.lines)]
+    e.weights = [exp_integral(line, e.cutpoints[i], e.cutpoints[i+1]) for (i, line) in enumerate(e.lines)]
 end
 
 """
@@ -129,7 +139,7 @@ function eval_envelop(e::Envelop, x::Float64)
     if pos == 1 || pos == length(e.cutpoints) + 1
         return 0.0
     else
-        a, b = e.lines[pos - 1].slope, e.lines[pos - 1].intercept
+        a, b = e.lines[pos-1].slope, e.lines[pos-1].intercept
         return exp(a * x + b)
     end
 end
@@ -147,27 +157,37 @@ struct Objective
     grad::Function
     Objective(logf::Function) = begin
         # Automatic differentiation
-        grad(x) = ForwardDiff.derivative(logf, x)
+        grad(x) = derivative(logf, x)
         new(logf, grad)
     end
     Objective(logf::Function, grad::Function) = new(logf, grad)
 end
 
 """
+RejectionSampler(f::Function, support::Tuple{Float64, Float64}, init::Tuple{Float64, Float64})
     RejectionSampler(f::Function, support::Tuple{Float64, Float64}[ ,δ::Float64])
-    RejectionSampler(f::Function, support::Tuple{Float64, Float64}, init::Tuple{Float64, Float64})
-An adaptive rejection sampler to obtain iid samples from a logconcave function `f`, supported in the
-domain `support` = (support[1], support[2]). To create the object, two initial points `init = init[1], init[2]`
-such that `loff'(init[1]) > 0` and `logf'(init[2]) < 0` are necessary. If they are not provided, the constructor
-will perform a greedy search based on `δ`.
-
-The argument `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the
+An adaptive rejection sampler to obtain iid samples from a logconcave function supported in 
+`support = (support[1], support[2])`. f can either be the either probability density of the 
+function to be sampled, or its logarithm. For the latter, use the keyword argument `log=true`. 
+The functions can be unnormalized in the sense that the probability density can be specified up to a constant. 
+The adaptive rejection samplings algorithm requires two initial points `init = init[1], init[2]`
+such that (d/dx)logp(init[1]) > 0 and (d/dx)logp(init[2]) < 0. These points can be provided directly
+(typically, any point left and right of the mode will do). It is also possibe to specify and search
+range and delta for a greedy search of the initial points. 
+The `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the
 interval in which f has positive value, and zero elsewhere.
+
+The alternative constructor uses a search_range, a value δ for the distance between points in the search,
+and min/max slope values in absolute terms.
 
 ## Keyword arguments
 - `max_segments::Int = 10` : max size of envelop, the rejection-rate is usually slow with a small number of segments
 - `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate
     exceeding this value
+- `logdensity::Bool = false`: indicator fo whether `f` is the log of the probability density, up to a normalization constant.
+- `search_range::Tuple{Float64,Float64} = (-10.0, 10.0)`: range in which to search for initial points
+- `min_slope::Float64 = 1e-6`: minimum slope in absolute value of logf at the initial/found points
+- `max_slope::Float64 = Inf: maximum slope in absolute value of logf at the initial/found points
 """
 struct RejectionSampler
     objective::Objective
@@ -176,42 +196,56 @@ struct RejectionSampler
     max_failed_rate::Float64
     # Constructor when initial points are provided
     RejectionSampler(
-            f::Function,
-            support::Tuple{Float64, Float64},
-            init::Tuple{Float64, Float64};
-            max_segments::Int = 25,
-            max_failed_rate::Float64 = 0.001
+        f::Function,
+        support::Tuple{Float64,Float64},
+        init::Tuple{Float64,Float64};
+        max_segments::Int=25,
+        logdensity::Bool=false,
+        max_failed_rate::Float64=0.001,
     ) = begin
         @assert support[1] < support[2] "invalid support, not an interval"
-        logf(x) = log(f(x))
-        objective = Objective(logf)
+        if logdensity
+            objective = Objective(f)
+        else
+            objective = Objective(x -> log(f(x)))
+        end
         x1, x2 = init
         @assert x1 < x2 "cutpoints must be ordered"
         a1, a2 = objective.grad(x1), objective.grad(x2)
-        @assert a1 >= 0 "logf must have positive slope at initial cutpoint 1"
-        @assert a2 <= 0 "logf must have negative slope at initial cutpoint 2"
+        @assert 0.0 < a1 "logf must have positive slope at initial cutpoint 1"
+        @assert a2 < 0.0 "logf must have negative slope at initial cutpoint 2"
         b1, b2 = objective.logf(x1) - a1 * x1, objective.logf(x2) - a2 * x2
         line1, line2 = Line(a1, b1), Line(a2, b2)
         envelop = Envelop([line1, line2], support)
         new(objective, envelop, max_segments, max_failed_rate)
     end
-
-    # Constructor for greedy search of starting points
+""
     RejectionSampler(
-            f::Function,
-            support::Tuple{Float64, Float64},
-            δ::Float64 = 0.5;
-            search_range::Tuple{Float64, Float64} = (-10.0,10.0),
-            kwargs...
+        f::Function,
+        support::Tuple{Float64,Float64},
+        δ::Float64=0.5;
+        search_range::Tuple{Float64,Float64}=(-10.0, 10.0),
+        min_slope::Float64=1e-6,
+        max_slope::Float64=10.0,
+        logdensity::Bool=false,
+        kwargs...
     ) = begin
-        logf(x) = log(f(x))
-        grad(x) = ForwardDiff.derivative(logf, x)
+        if logdensity
+            logf = f
+        else
+            logf = (x -> log(f(x)))
+        end
+        grad(x) = derivative(logf, x)
         grid_lims = max(search_range[1], support[1]), min(search_range[2], support[2])
         grid = grid_lims[1]:δ:grid_lims[2]
-        i1, i2 = findfirst(grad.(grid) .> 0.), findfirst(grad.(grid) .< 0.)
-        @assert (i1 != nothing) &&  (i2 != nothing) "couldn't find initial points, please provide them or change `search_range`"
+        grads = grad.(grid)
+        i1 = findfirst(min_slope .< grads .< max_slope)
+        i2 = findlast(min_slope .< - grads .< max_slope)
+        @assert (i1 !== nothing) && (i2 !== nothing) "couldn't find initial points, please provide them or change `search_range`"
+        @assert i1 < i2 "function is not logconcave, first index with grad>0 must be smaller than first index with grad<0"
         x1, x2 = grid[i1], grid[i2]
-        RejectionSampler(f, support, (x1, x2); kwargs...)
+        @info "initial points found at $(x1), $(x2) with grads $(grads[i1]), $(grads[i2])"
+        RejectionSampler(f, support, (x1, x2); logdensity=logdensity, kwargs...)
     end
 end
 
