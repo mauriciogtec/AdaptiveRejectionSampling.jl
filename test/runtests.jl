@@ -73,4 +73,9 @@ end
         sampler = ars.RejectionSampler(x -> exp(-0.5 * x) / sqrt(2pi), (-Inf, Inf))
         ars.run_sampler!(sampler, 5) isa Vector{T} where T <: AbstractFloat
     end
+    @test begin
+        sampler = ars.RejectionSampler(x -> -abs(x), (-Inf, Inf), logdensity=true)
+        ars.run_sampler!(sampler, 5) isa Vector{T} where {T<:AbstractFloat}
+    end
 end
+
