@@ -139,7 +139,8 @@ plot!(x, [target envelop], width = 2, label = ["target density" "envelop"])
 
 Here are some tips:
 
-- Make sure the logdensity is numerically stable in the domain and values above > 25;
+- Make sure the logdensity is numerically stable in the domain and avoid logdensity values > 25 (since
+  the evaluation of the envelop requires exponentials);
 - Use log densities instead of densities using the keyword `logdensity=true`;
 - Specify a `min_slope` and `max_slope` to find better initial points. The default is 1e-6 and 1e6, respectively.
   The `min_slope` is the minimum slope of the logdensity in the initial points  of the envelop in absolute value. In general,
