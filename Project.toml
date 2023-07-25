@@ -1,6 +1,6 @@
 name = "AdaptiveRejectionSampling"
 uuid = "c75e803d-635f-53bd-ab7d-544e482d8c75"
-version = "0.2.0"
+version = "0.2.1"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
