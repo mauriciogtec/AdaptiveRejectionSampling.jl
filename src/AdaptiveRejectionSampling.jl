@@ -1,284 +1,556 @@
-
 """
 A log conconcave function is majorized with a piecewise envelop, which on the original scale is piecewise
 exponential. As the resulting extremely precise envelop adapts, the rejection rate dramatically decreases.
 """
 module AdaptiveRejectionSampling
-# ------------------------------
-using Random # Random stdlib
-# ------------------------------
-import ForwardDiff: derivative 
-import StatsBase: sample, weights
-# ------------------------------
-export Line, Objective, Envelop, RejectionSampler # Structures/classes
-export run_sampler!, sample_envelop, eval_envelop, add_segment! # Methods
-# ------------------------------
+
+import SpecialFunctions: loggamma
+using StatsBase
+import Random: default_rng, AbstractRNG
+using DifferentiationInterface
+import ForwardDiff
+using Compat
+
+const DEFAULT_MAX_SEGMENTS::Int = 25
+
 
 """
-    Line(slope::Float64, intercept::Float64)
-Basic ensamble-unit for an envelop.
-"""
-mutable struct Line
-    slope::Float64
-    intercept::Float64
-end
+    AllocFreeWeights{S <: Real, T <: Number, V <: AbstractVector{T}} <: AbstractWeights{S, T, V}
 
+Non-mutable weights used in the `sample` function in this package in order to avoid allocations.
 """
-    intersection(l1::Line, l2::Line)
-Finds the horizontal coordinate of the intersection between lines
-"""
-function intersection(l1::Line, l2::Line)
-    @assert l1.slope != l2.slope "slopes should be different"
-    -(l2.intercept - l1.intercept) / (l2.slope - l1.slope)
-end
+struct AllocFreeWeights{S <: Real, T <: Number, V <: AbstractVector{T}} <: AbstractWeights{S, T, V}
+    values::V
+    sum::S
 
-"""
-    exp_integral(l::Line, x1::Float64, x2::Float64)
-Computes the integral
-    ``LaTeX \\int_{x_1} ^ {x_2} \\exp\\{ax + b\\} dx. ``
-The resulting value is the weight assigned to the segment [x1, x2] in the envelop
-"""
-@inline function exp_integral(l::Line, x1::Float64, x2::Float64)
-    a, b = l.slope, l.intercept
-    v1, v2 = a*x1, a*x2
-    if v1 > 25.0 || v2 > 25.0 || a == 0.0 || b > 25.0
-        @warn "exp_integral: numerical instability, truncating, check for under/overflow, consider truncating logf"
-        v1 = min(v1, 25.0)
-        v2 = min(v2, 25.0)
-        b = min(b, 25.0)
-        if a == 0
-            a = (v2 - v1) * 1e-6
-        end
-    end
-    exp(b) * (exp(v2) - exp(v1)) / a
-end
-
-"""
-    Envelop(lines::Vector{Line}, support::Tuple{Float64, Float64})
-A piecewise linear function with k segments defined by the lines `L_1, ..., L_k` and cutpoints
-`c_1, ..., c_k+1` with `c1 = support[1]` and `c2 = support[2]`. A line L_k is active in the segment
-[c_k, c_k+1], and it's assigned a weight w_k based on [exp_integral](@exp_integral). The weighted integral
-over c_1 to c_k+1 is one, so that the envelop is interpreted as a density.
-"""
-mutable struct Envelop
-    lines::Vector{Line}
-    cutpoints::AbstractVector{Float64}
-    weights::AbstractVector{Float64}
-    size::Int
-
-    Envelop(lines::Vector{Line}, support::Tuple{Float64,Float64}) = begin
-        @assert issorted([l.slope for l in lines], rev=true) "line slopes must be decreasing"
-        intersections = [intersection(lines[i], lines[i+1]) for i in 1:(length(lines)-1)]
-        cutpoints = [support[1]; intersections; support[2]]
-        @assert issorted(cutpoints) "cutpoints must be ordered"
-        @assert length(unique(cutpoints)) == length(cutpoints) "cutpoints can't have duplicates"
-        weights = [exp_integral(l, cutpoints[i], cutpoints[i+1]) for (i, l) in enumerate(lines)]
-        @assert Inf ∉ weights "Overflow in assigning weights"
-        new(lines, cutpoints, weights, length(lines))
+    function AllocFreeWeights(ws::V, sum::S) where {S <: Real, T <: Number, V <: AbstractVector{T}}
+        return new{S, T, V}(ws, sum)
     end
 end
 
+function AllocFreeWeights(ws::V) where {T <: Number, V <: AbstractVector{T}}
+    return AllocFreeWeights(ws, sum(ws))
+end
+
+
+struct Objective{T <: Number, F <: Function, G <: Function}
+    "The (log-concave) function defining the density `f(x) -> y`"
+    f::F
+    "Its gradient `grad(x) -> y'`"
+    grad::G
+
+    @doc """
+        Objective(f::Function, grad::Function, ::Type{T} = Float64) where {T <: Number}
+
+    Create an `Objective` directly defined by its function `f` and custom gradient `grad`.
+    The parameter `T` represents the type of the expected input and is utilized when preparing gradients using autodiff.
+    By default `T = Float64`.
+
+
+    !!! warning
+        Observe that `f` should be in its
+        log-concave form and that no checks are performed in order to verify this.
+    """
+    function Objective(f::Function, grad::Function, ::Type{T} = Float64) where {T <: Number}
+        return new{T, typeof(f), typeof(grad)}(f, grad)
+    end
+end
 
 """
-    add_segment!(e::Envelop, l::Line)
-Adds a new line segment to an envelop based on the value of its slope (slopes must be decreasing
-always in the envelop). The cutpoints are automatically determined by intersecting the line with
-the adjacent lines.
+    Objective(f::Function, init = one(Float64); adbackend = AutoForwardDiff())
+
+Create an `Objective` for a function automatically generating its gradient.
+Gradients are calculated using `DifferentiationInterface.jl` using the backend of choice
+with `ForwardDiff.jl` being the default. In order to prepare the gradient an initial value is
+required. By default this is `one(Float64)`. If a gradient for a different type is
+desired, it should be specified through this initial value.
+
+If a custom/manual gradient is available it may instead be provided.
+
+!!! warning
+    Observe that `f` should be in its
+    log-concave form and that no checks are performed in order to verify this.
+
+# Example
+
+```julia
+# Create an objective using `Mooncake.jl` autodiff and Float32 as its type.
+ARS.Objective(somefun, one(Float32); adbackend = AutoMooncake(; config=nothing))
+# Create an objective using the defaults `AutoDiff.jl` autodiff and Float64 as its type.
+ARS.Objective(somefun)
+```
 """
-function add_segment!(e::Envelop, l::Line)
-    # Find the position in sorted array with binary search
-    pos = searchsortedfirst([-line.slope for line in e.lines], -l.slope)
-    # Find the new cutpoints
-    if pos == 1
-        new_cut = intersection(l, e.lines[pos])
-        # Insert in second position, first one is the support bound
-        insert!(e.cutpoints, pos + 1, new_cut)
-    elseif pos == e.size + 1
-        new_cut = intersection(l, e.lines[pos-1])
-        insert!(e.cutpoints, pos, new_cut)
+function Objective(f::Function, init = one(Float64); adbackend = AutoForwardDiff())
+    gradprep = prepare_gradient(f, adbackend, init)
+    obj = Objective(
+        f,
+        x -> gradient(f, gradprep, adbackend, x),
+        typeof(init)
+    )
+    return obj
+end
+
+abstract type AbstractHull end
+
+"""
+    struct UpperHull{T} <: AbstractHull
+           intercepts::Vector{T}
+           slopes::Vector{T}
+           intersections::Vector{T}
+           abscissae::Vector{T}
+           segment_weights::Vector{T}
+           domain::Tuple{T, T}
+    end
+
+Upper hull of the enveloping function.
+"""
+struct UpperHull{T} <: AbstractHull
+    intercepts::Vector{T}
+    slopes::Vector{T}
+    intersections::Vector{T}
+    abscissae::Vector{T}
+    segment_weights::Vector{T}
+    domain::Tuple{T, T}
+end
+
+Base.broadcastable(h::UpperHull) = Ref(h)
+
+slopes(h::UpperHull) = h.slopes
+intercepts(h::UpperHull) = h.intercepts
+intersections(h::UpperHull) = h.intersections
+abscissae(h::UpperHull) = h.abscissae
+line(h::UpperHull, i::Integer) = (h.slopes[i], h.intercepts[i])
+lineinds(h::UpperHull) = 1:(length(slopes(h)))
+n_lines(h::UpperHull) = length(slopes(h))
+segment_weights(h::UpperHull) = h.segment_weights
+
+"""
+    eval_hull(h::UpperHull, x)
+
+Eval hull `h` at `x`.
+"""
+function eval_hull(h::UpperHull, x)
+    i = searchsortedfirst(intersections(h), x) - 1
+    sl, int = line(h, i)
+    return sl * x + int
+end
+
+
+"""
+    intersection(slope1::T, intercept1::T, slope2::T, intercept2::T) where {T}
+
+Returns the intersection abscissa between 2 lines as defined by their slopes and intercepts. Returns NaN if the lines are paralell.
+"""
+function intersection(slope1::T, intercept1::T, slope2::T, intercept2::T) where {T}
+    return (intercept2 - intercept1) / (slope1 - slope2)
+end
+
+"""
+    calc_intersects!(out::AbstractVector{T}, slopes::AbstractVector{T}, intercepts::AbstractVector{T}) where {T}
+
+Calculate intersections of a series of lines defined by their `slopes` and `intercepts`, storing the result in `out`.
+"""
+function calc_intersects!(out::AbstractVector{T}, slopes::AbstractVector{T}, intercepts::AbstractVector{T}) where {T}
+    for i in eachindex(out)
+        out[i] = intersection(slopes[i], intercepts[i], slopes[i + 1], intercepts[i + 1])
+    end
+    return nothing
+end
+
+"""
+    calc_intersects(slopes::AbstractVector{T}, intercepts::AbstractVector{T}) where {T}
+
+Calculate intersections of a series of lines defined by their `slopes` and `intercepts`.
+"""
+function calc_intersects(slopes::AbstractVector{T}, intercepts::AbstractVector{T}) where {T}
+    # return [
+    #     intersection(slopes[i], intercepts[i], slopes[i + 1], intercepts[i + 1])
+    #         for i in 1:(length(slopes) - 1)
+    # ]
+
+    out = Vector{T}(undef, length(slopes) - 1)
+    calc_intersects!(out, slopes, intercepts)
+    return out
+end
+
+
+"""
+    calc_slopes_and_intercepts(obj::Objective, abscissae::AbstractVector{T}) where {T}
+
+Calculates slopes and intercepts of the lines tangential to the objective function at `abscissae`.
+"""
+function calc_slopes_and_intercepts(obj::Objective, abscissae::AbstractVector{T}) where {T}
+    issorted(abscissae) ||
+        throw(ArgumentError("`abscissae` should be sorted in ascending order."))
+    slopes = [obj.grad(abscissae[i]) for i in eachindex(abscissae)]
+    intercepts = [
+        slopes[i] * (-abscissae[i]) + obj.f(abscissae[i])
+            for i in eachindex(abscissae)
+    ]
+    return slopes, intercepts
+end
+
+
+"""
+    exp_integral_line(slope, intercept, x1, x2)
+
+Calculate the integral of `exp(slope * x + intercept)` between `x1` and `x2`.
+"""
+function exp_integral_line(slope, intercept, x1, x2)
+    return if !iszero(slope)
+        (exp(slope * x2 + intercept) - exp(slope * x1 + intercept)) / slope
     else
-        new_cut1 = intersection(l, e.lines[pos-1])
-        new_cut2 = intersection(l, e.lines[pos])
-        splice!(e.cutpoints, pos, [new_cut1, new_cut2])
-        @assert issorted(e.cutpoints) "incompatible line: resulting intersection points aren't sorted"
+        (x2 - x1) * exp(intercept)
     end
-    # Insert the new line
-    insert!(e.lines, pos, l)
-    e.size += 1
-    # Recompute weights (this could be done more efficiently in the future by updating the neccesary ones only)
-    e.weights = [exp_integral(line, e.cutpoints[i], e.cutpoints[i+1]) for (i, line) in enumerate(e.lines)]
 end
 
 """
-    sample_envelop(rng::AbstractRNG, e::Envelop)
-    sample_envelop(e::Envelop)
-Samples an element from the density defined by the envelop `e` with it's exponential weights.
-See [`Envelop`](@Envelop) for details.
+    UpperHull(obj::Objective, abscissae::Vector{T}, domain::Tuple{T, T}) where {T}
+
+Create an `UpperHull` based on the objective function, initial abscissae and its domain.
 """
-function sample_envelop(rng::AbstractRNG, e::Envelop)
-    # Randomly select lines based on envelop weights
-    i = sample(rng, 1:e.size, weights(e.weights))
-    a, b = e.lines[i].slope, e.lines[i].intercept
-    # Use the inverse CDF method for sampling
-    log(exp(-b) * rand(rng) * e.weights[i] * a + exp(a * e.cutpoints[i])) / a
+function UpperHull(obj::Objective{T}, abscissae::Vector{T}, domain::Tuple{T, T}) where {T}
+    slopes, intercepts = calc_slopes_and_intercepts(obj, abscissae)
+
+    intersects = [domain[1]; calc_intersects(slopes, intercepts); domain[2]]
+
+    wgts = Vector{T}(undef, length(slopes))
+    for i in 1:length(wgts)
+        wgts[i] = exp_integral_line(slopes[i], intercepts[i], intersects[i], intersects[i + 1])
+    end
+
+    return UpperHull(intercepts, slopes, intersects, abscissae, wgts, domain)
 end
 
-function sample_envelop(e::Envelop)
-    sample_envelop(Random.GLOBAL_RNG, e)
-end
-
-
+# Calculate the inverse CDF of a segment, handling a slope of zero.
 """
-    eval_envelop(e::Envelop, x::Float64)
-Eval point a point `x` in the piecewise linear function defined by `e`. Necessary for evaluating
-the density assigned to the point `x`.
+    inv_cdf_seg(slope, intercept, r, w, intersect, intersect2)
+
+Calculate the inverse cumulative density of a hull segment at `r` based on its...
+
+- `slope`
+- `intercept`
+- `w` (weight)
+- `intersect`, `intersect2`, its intersections with previous/next segments
 """
-function eval_envelop(e::Envelop, x::Float64)
-    # searchsortedfirst is the proper method for and ordered list
-    pos = searchsortedfirst(e.cutpoints, x)
-    if pos == 1 || pos == length(e.cutpoints) + 1
-        return 0.0
+@inline function inv_cdf_seg(slope, intercept, r, w, intersect, intersect2)
+    return if !iszero(slope)
+        log(exp(-intercept) * r * w * slope + exp(slope * intersect)) / slope
     else
-        a, b = e.lines[pos-1].slope, e.lines[pos-1].intercept
-        return exp(a * x + b)
+        r * (intersect2 - intersect) + intersect
     end
 end
 
-# --------------------------------
+# Draw a single sample from `h`.
+function sample_hull(rng::AbstractRNG, h::UpperHull)
+    ws = segment_weights(h)
+    ind = sample(rng, AllocFreeWeights(ws, sum(ws)))
+    sl, int = line(h, ind)
+    return inv_cdf_seg(sl, int, rand(rng), segment_weights(h)[ind], intersections(h)[ind], intersections(h)[ind + 1])
+end
+sample_hull(h::UpperHull) = sample_hull(default_rng(), h)
+
+
+# Draw `n` samples from `h`, storing the result in `out`.
+function sample_hull!(rng::AbstractRNG, out::AbstractVector{T}, h::UpperHull{T}, n::Integer) where {T}
+    seg_wgts = segment_weights(h)
+    inds = sample(rng, 1:n_lines(h), AllocFreeWeights(seg_wgts, sum(seg_wgts)), n)
+    rands = rand(rng, n)
+    for i in eachindex(inds, out, rands)
+        ind = inds[i]
+        sl, int = line(h, ind)
+        out[i] = inv_cdf_seg(sl, int, rands[i], segment_weights(h)[ind], intersections(h)[ind], intersections(h)[ind + 1])
+    end
+    return
+end
+sample_hull!(out::AbstractVector{T}, h::UpperHull{T}, n::Integer) where {T} = sample_hull!(default_rng(), out, h, n)
+
+function sample_hull!(rng, out::AbstractVector{T}, h::UpperHull) where {T}
+    return sample_hull!(rng, out, h, length(out))
+end
+sample_hull!(out::AbstractVector{T}, h::UpperHull) where {T} = sample_hull!(default_rng(), out, h)
+
+# Draw `n` samples from `h`.
+function sample_hull(rng::AbstractRNG, h::UpperHull{T}, n::Integer) where {T}
+    out = Vector{T}(undef, n)
+    sample_hull!(rng, out, h, n)
+    return out
+end
+sample_hull(h::UpperHull, n::Integer) = sample_hull(default_rng(), h, n)
+
+struct LowerHull{T}
+    intercepts::Vector{T}
+    slopes::Vector{T}
+    intersections::Vector{T}
+end
+
+
+Base.broadcastable(h::LowerHull) = Ref(h)
+
+
+intercepts(h::LowerHull) = h.intercepts
+slopes(h::LowerHull) = h.slopes
+intersections(h::LowerHull) = h.intersections
+line(h::LowerHull, i) = (h.slopes[i], h.intercepts[i])
+
+function calc_lower_slopes_and_intercepts!(
+        slout::AbstractVector{T}, intout::AbstractVector{T},
+        intersections::AbstractVector{T}, f::Function
+    ) where {T}
+
+    for i in eachindex(slout, intout)
+        slout[i] = (f(intersections[i + 1]) - f(intersections[i])) /
+            (intersections[i + 1] - intersections[i])
+        intout[i] = slout[i] * (-intersections[i]) + f(intersections[i])
+    end
+    return nothing
+end
+
+
+function LowerHull(upper::UpperHull{T}, obj::Objective{T}) where {T}
+    intersections = abscissae(upper) # NOTE: This makes them alias each other!
+    n_segs = length(intersections) - 1
+    sl = Vector{T}(undef, n_segs)
+    int = Vector{T}(undef, n_segs)
+
+    calc_lower_slopes_and_intercepts!(sl, int, intersections, obj.f)
+
+    return LowerHull(int, sl, intersections)
+end
+
+function eval_hull(h::LowerHull, x)
+    i = searchsortedfirst(intersections(h), x)
+    if isone(i) || i == lastindex(intersections(h)) + 1
+        return -Inf
+    end
+    sl, int = line(h, i - 1)
+    return sl * x + int
+end
+
 
 """
-    Objective(logf::Function, support:)
-    Objective(logf::Function, grad::Function)
-Convenient structure to store the objective function to be sampled. It must receive the logarithm of
-f and not f directly. It uses automatic differentiation by default, but the user can provide the derivative optionally.
+    ARSampler{T, F, G}
+
+Adaptive rejection sampler containing the objective function, its gradient and the
+upper/lower hull of the piecewise linear envelope.
 """
-struct Objective
-    logf::Function
-    grad::Function
-    Objective(logf::Function) = begin
-        # Automatic differentiation
-        grad(x) = derivative(logf, x)
-        new(logf, grad)
-    end
-    Objective(logf::Function, grad::Function) = new(logf, grad)
+struct ARSampler{T, F, G}
+    objective::Objective{T, F, G}
+    upper_hull::UpperHull{T}
+    lower_hull::LowerHull{T}
 end
 
 """
-RejectionSampler(f::Function, support::Tuple{Float64, Float64}, init::Tuple{Float64, Float64})
-    RejectionSampler(f::Function, support::Tuple{Float64, Float64}[ ,δ::Float64])
-An adaptive rejection sampler to obtain iid samples from a logconcave function supported in 
-`support = (support[1], support[2])`. f can either be the either probability density of the 
-function to be sampled, or its logarithm. For the latter, use the keyword argument `log=true`. 
-The functions can be unnormalized in the sense that the probability density can be specified up to a constant. 
-The adaptive rejection samplings algorithm requires two initial points `init = init[1], init[2]`
-such that (d/dx)logp(init[1]) > 0 and (d/dx)logp(init[2]) < 0. These points can be provided directly
-(typically, any point left and right of the mode will do). It is also possibe to specify and search
-range and delta for a greedy search of the initial points. 
-The `support` must be of the form `(-Inf, Inf), (-Inf, a), (b, Inf), (a,b)`, and it represent the
-interval in which f has positive value, and zero elsewhere.
+    ARSampler(
+        obj::Objective{T, F, G},
+        domain::Tuple{T, T},
+        initial_points::Vector{T}
+    ) where {T <: AbstractFloat, F <: Function, G <: Function}
 
-The alternative constructor uses a search_range, a value δ for the distance between points in the search,
-and min/max slope values in absolute terms.
+    ARSampler(
+        obj::Objective{T, F, G},
+        domain::Tuple{T, T},
+        search_range::Tuple{T, T} = (-10.0, 10.0),
+        search_step = 0.1
+    ) where {T <: AbstractFloat, F <: Function, G <: Function}
 
-## Keyword arguments
-- `max_segments::Int = 10` : max size of envelop, the rejection-rate is usually slow with a small number of segments
-- `max_failed_factor::Float64 = 0.001`: level at which throw an error if one single sample has a rejection rate
-    exceeding this value
-- `logdensity::Bool = false`: indicator fo whether `f` is the log of the probability density, up to a normalization constant.
-- `search_range::Tuple{Float64,Float64} = (-10.0, 10.0)`: range in which to search for initial points
-- `min_slope::Float64 = 1e-6`: minimum slope in absolute value of logf at the initial/found points
-- `max_slope::Float64 = Inf: maximum slope in absolute value of logf at the initial/found points
+Initialize an adaptive rejection sampler over an objective function from `obj` ([`ARSampling.Objective`](@ref)).
+`initial_points` should be a vector defining the abscissae of the initial segments of the sampler.
+ At least 2 of the points should be on opposite sides of the objective function's maximum.
+
+If no `initial_points` an attempt to find suitable ones will be made by searching for
+the first negative/positive slope of `obj`. The default search range is `-10:10` with a
+step of `0.1`.
+
+!!! warning
+    As it currently stands, finding inital points will fail for distributions bounded
+    to the left/right of their maximum. In these cases the initial point(s) need to
+    be provided manually (however, only a single initial point has to be provided).
 """
-struct RejectionSampler
-    objective::Objective
-    envelop::Envelop
-    max_segments::Int
-    max_failed_rate::Float64
-    # Constructor when initial points are provided
-    RejectionSampler(
-        f::Function,
-        support::Tuple{Float64,Float64},
-        init::Tuple{Float64,Float64};
-        max_segments::Int=25,
-        logdensity::Bool=false,
-        max_failed_rate::Float64=0.001,
-    ) = begin
-        @assert support[1] < support[2] "invalid support, not an interval"
-        if logdensity
-            objective = Objective(f)
-        else
-            objective = Objective(x -> log(f(x)))
-        end
-        x1, x2 = init
-        @assert x1 < x2 "cutpoints must be ordered"
-        a1, a2 = objective.grad(x1), objective.grad(x2)
-        @assert 0.0 < a1 "logf must have positive slope at initial cutpoint 1"
-        @assert a2 < 0.0 "logf must have negative slope at initial cutpoint 2"
-        b1, b2 = objective.logf(x1) - a1 * x1, objective.logf(x2) - a2 * x2
-        line1, line2 = Line(a1, b1), Line(a2, b2)
-        envelop = Envelop([line1, line2], support)
-        new(objective, envelop, max_segments, max_failed_rate)
-    end
-""
-    RejectionSampler(
-        f::Function,
-        support::Tuple{Float64,Float64},
-        δ::Float64=0.5;
-        search_range::Tuple{Float64,Float64}=(-10.0, 10.0),
-        min_slope::Float64=1e-6,
-        max_slope::Float64=10.0,
-        logdensity::Bool=false,
-        kwargs...
-    ) = begin
-        if logdensity
-            logf = f
-        else
-            logf = (x -> log(f(x)))
-        end
-        grad(x) = derivative(logf, x)
-        grid_lims = max(search_range[1], support[1]), min(search_range[2], support[2])
-        grid = grid_lims[1]:δ:grid_lims[2]
-        grads = grad.(grid)
-        i1 = findfirst(min_slope .< grads .< max_slope)
-        i2 = findlast(min_slope .< - grads .< max_slope)
-        @assert (i1 !== nothing) && (i2 !== nothing) "couldn't find initial points, please provide them or change `search_range`"
-        @assert i1 < i2 "function is not logconcave, first index with grad>0 must be smaller than first index with grad<0"
-        x1, x2 = grid[i1], grid[i2]
-        @info "initial points found at $(x1), $(x2) with grads $(grads[i1]), $(grads[i2])"
-        RejectionSampler(f, support, (x1, x2); logdensity=logdensity, kwargs...)
-    end
+function ARSampler end
+
+function ARSampler(
+        obj::Objective{T, F, G},
+        domain::Tuple{T, T},
+        initial_points::Vector{T}
+    ) where {T <: AbstractFloat, F <: Function, G <: Function}
+
+    u = UpperHull(obj, initial_points, domain)
+    l = LowerHull(u, obj)
+
+    return ARSampler{T, F, G}(obj, u, l)
+end
+
+
+function ARSampler(obj::Objective{T, F, G}, domain::Tuple{<:Number, <:Number}, search_range::Tuple{<:Number, <:Number} = (-10.0, 10.0); search_step = 0.5) where {T <: AbstractFloat, F <: Function, G <: Function}
+    domain_T = T.(domain)
+    search_range_T = T.(search_range)
+    lbs = T(max(domain_T[1], search_range_T[1]))
+    ubs = T(min(domain_T[2], search_range_T[2]))
+    search_step_T = T(search_step)
+    initial_points = find_initial_points(obj, lbs, ubs, search_step_T)
+
+    return ARSampler(obj, domain_T, initial_points)
 end
 
 """
-    run_sampler!(rng::AbstractRNG, sampler::RejectionSampler, n::Int)
-    run_sampler!(sampler::RejectionSampler, n::Int)
-It draws `n` iid samples of the objective function of `sampler`, and at each iteration it adapts the envelop
-of `sampler` by adding new segments to its envelop.
+    find_initial_points(obj, lbs, ubs, search_step)
+
+Attempts to find suitable initial points for abscissae based on the objective functions by looking for
+the first points with positive and negative slopes respectively. Simply searches between the bounds specified
+by `lbs` and `ubs` with step size `search_step`.
 """
-function run_sampler!(rng::AbstractRNG, s::RejectionSampler, n::Int)
-    i = 0
-    failed, max_failed = 0, trunc(Int, n / s.max_failed_rate)
-    out = zeros(n)
-    while i < n
-        candidate = sample_envelop(rng, s.envelop)
-        acceptance_ratio = exp(s.objective.logf(candidate)) / eval_envelop(s.envelop, candidate)
-        if rand(rng) < acceptance_ratio
-            i += 1
-            out[i] = candidate
-        else
-            if length(s.envelop.lines) <= s.max_segments
-                a = s.objective.grad(candidate)
-                b = s.objective.logf(candidate) - a * candidate
-                add_segment!(s.envelop, Line(a, b))
+function find_initial_points(obj, lbs, ubs, search_step)
+    grad = obj.grad
+    r = lbs:search_step:ubs
+    g = (grad(x) for x in r)
+    l = findfirst(>(0), g)
+    u = findfirst(<(0), g)
+    isnothing(l) && throw(
+        ErrorException(
+            lazy"""
+            Could not find the left initial segment.
+            Search range: $(lbs) -- $(ubs)
+            Search step: $(search_step)
+            """
+        )
+    )
+    isnothing(u) && throw(
+        ErrorException(
+            lazy"""
+            Could not find the right initial segment.
+            Search range: $(lbs) -- $(ubs)
+            Search step: $(search_step)
+            """
+        )
+    )
+    return [r[l], r[u]]
+end
+
+
+function n_segments(s::ARSampler)
+    return n_lines(s.upper_hull)
+end
+
+# Adds a segment with abscissa at `x` to `s`
+"""
+    add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
+
+Modifies the hulls of `s`, adding a segment with abscissa at `x`.
+"""
+function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
+
+    # Calculate slope, intercept and index of new segment
+    new_slope = s.objective.grad(x)
+    new_intercept = (new_slope * -x) + s.objective.f(x)
+    new_ind = searchsortedfirst(abscissae(s.upper_hull), x)
+
+    # Insert new slope and intercept
+    all_inters = intersections(s.upper_hull)
+    all_slopes = slopes(s.upper_hull)
+    all_intercepts = intercepts(s.upper_hull)
+    insert!(all_slopes, new_ind, new_slope)
+    insert!(all_intercepts, new_ind, new_intercept)
+
+    # Insert new abscissa
+    insert!(abscissae(s.upper_hull), new_ind, x)
+
+    # TODO: Only calculate the intersections and weights that actually change.
+    # Recalculate intersection points for segments, given the new segment
+    push!(all_inters, zero(T)) # Extend intercepts by one
+    calc_intersects!(@view(all_inters[(begin + 1):(end - 1)]), all_slopes, all_intercepts)
+
+    # Recalculate segment weights
+    all_weights = segment_weights(s.upper_hull)
+    push!(all_weights, zero(T))
+
+    for i in eachindex(all_weights)
+        all_weights[i] = exp_integral_line(all_slopes[i], all_intercepts[i], all_inters[i], all_inters[i + 1])
+    end
+
+    #= Lower hull time =#
+    # We don't need to add anything to the lower intersections as it is the same vector used for abscissae
+    # in the upper hull
+
+    all_inters_lower = intersections(s.lower_hull)
+    lowerslopes = slopes(s.lower_hull)
+    lowerintercepts = intercepts(s.lower_hull)
+    push!(lowerslopes, zero(T))
+    push!(lowerintercepts, zero(T))
+    calc_lower_slopes_and_intercepts!(
+        lowerslopes,
+        lowerintercepts,
+        all_inters_lower,
+        s.objective.f
+    )
+
+    return nothing
+end
+
+# TODO: Make this prepopulate `out` using `sample_hull!`?
+# NOTE: The above might be inefficient initially if most of the samples get rejected anyway?
+"""
+    __sample!(rng::AbstractRNG, out::AbstractVector{T}, s::ARSampler{T}, add_segments::Bool, max_segments) where {T<:AbstractFloat}
+
+
+All other `__sample!` methods call this one.
+"""
+function __sample!(rng::AbstractRNG, out::AbstractVector{T}, s::ARSampler{T}, add_segments::Bool, max_segments) where {T <: AbstractFloat}
+    n = length(out)
+    n_accepted = 0
+    while n_accepted < n
+        x = sample_hull(rng, s.upper_hull)
+        up = eval_hull(s.upper_hull, x)
+        lo = eval_hull(s.lower_hull, x)
+        w = rand(rng)
+        # Squeeze test
+        if w <= exp(lo - up)
+            n_accepted += 1
+            out[n_accepted] = x
+        elseif w <= exp(s.objective.f(x) - up)
+            # Accept sample i
+            n_accepted += 1
+            out[n_accepted] = x
+            if add_segments && n_segments(s) < max_segments
+                add_segment!(s, x)
             end
-            failed += 1
-            @assert failed < max_failed "max_failed_factor reached"
+        elseif add_segments && n_segments(s) < max_segments
+            add_segment!(s, x)
         end
     end
-    out
+    return nothing
 end
+__sample!(out::Vector{T}, s::ARSampler{T}, add_segments::Bool, max_segments) where {T} = __sample!(default_rng(), out, s, add_segments, max_segments)
 
-function run_sampler!(s::RejectionSampler, n::Int)
-    run_sampler!(Random.GLOBAL_RNG, s, n)
+# Draw `n` samples, returning a newly allocated vector.
+function __sample!(rng::AbstractRNG, s::ARSampler{T}, n::Integer, add_segments::Bool, max_segments) where {T <: AbstractFloat}
+    out = Vector{T}(undef, n)
+    __sample!(rng, out, s, add_segments, max_segments)
+    return out
 end
+__sample!(s::ARSampler{T}, n::Integer, add_segments::Bool, max_segments) where {T <: AbstractFloat} = __sample!(default_rng(), s, n, add_segments, max_segments)
+
+
+"""
+    sample!([rng=default_rng()], s::ARSampler, n::Integer, add_segments::Bool=true)
+    sample!([rng=default_rng()], v::AbstractVector, s::ARSampler, add_segments::Bool=true)
+
+Draw samples from `s`. If supplied, a vector `v` will be filled with samples.
+Otherwise the number of samples is specified with `n`.
+
+"""
+function sample! end
+
+function sample!(rng::AbstractRNG, s::ARSampler{T}, n::Integer, add_segments::Bool = true, max_segments = DEFAULT_MAX_SEGMENTS) where {T <: AbstractFloat}
+    return __sample!(rng, s, n, add_segments, max_segments)
+end
+sample!(s::ARSampler{T}, n::Integer, add_segments::Bool = true, max_segments = DEFAULT_MAX_SEGMENTS) where {T <: AbstractFloat} = sample!(default_rng(), s, n, add_segments, max_segments)
+
+function sample!(rng::AbstractRNG, v::AbstractVector{T}, s::ARSampler{T}, add_segments::Bool = true, max_segments = DEFAULT_MAX_SEGMENTS) where {T}
+    __sample!(rng, v, s, add_segments, max_segments)
+    return nothing
+end
+sample!(v::AbstractVector{T}, s::ARSampler{T}, add_segments::Bool = true, max_segments = DEFAULT_MAX_SEGMENTS) where {T} = sample!(default_rng(), v, s, add_segments, max_segments)
+
+
 end # module AdaptiveRejectionSampling
