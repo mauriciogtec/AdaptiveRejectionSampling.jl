@@ -8,6 +8,8 @@ using Random
 using Distributions
 using Test
 using JET
+using Supposition
+using Supposition: @check
 
 include("wrappedallocs.jl")
 
@@ -39,12 +41,24 @@ fn(x) = normal_log(x, 3.14, 3.0)
 obj = Objective(fn)
 x = 2.4
 
+const f64gen = Data.Floats{Float64}(nans = false)
+const f64genmu = Data.Floats{Float64}(nans = false)
+const f64gensigma = Data.Floats{Float64}(nans = false, minimum = 0.0001)
+
 @testset "Objective" begin
     @test obj isa Objective{Float64, <:Function, <:Function}
     @test obj.grad(x) ≈ score_normal(x, 3.14, 3.0)
-    @test obj.f(x) ≈ normal_log(x, 3.14, 3.0)
+    @check function objective_f64_grad(v = f64gen, mu = f64genmu, sigma = f64gensigma)
+        o = Objective(x -> normal_log(x, mu, sigma))
+        ≈(score_normal(v, mu, sigma), o.grad(v), rtol = 0.01, atol = 0.0001)
+    end
+    @check function objective_f64_f(v = f64gen, mu = f64genmu, sigma = f64gensigma)
+        o = Objective(x -> normal_log(x, mu, sigma))
+        o.f(v) ≈ normal_log(v, mu, sigma)
+    end
     @test obj.grad(3.14) == 0.0
 end
+
 
 const n_samples = 100_000
 
@@ -132,7 +146,6 @@ end
 # ars = AdaptiveRejectionSampling
 
 # using Test
-
 
 
 # @testset "Line" begin
