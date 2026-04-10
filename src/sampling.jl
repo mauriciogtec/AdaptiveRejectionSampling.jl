@@ -512,7 +512,24 @@ function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
     return nothing
 end
 
-function __sample_single!(rng::AbstractRNG, s::ARSampler{T}, add_segments::Bool, max_segments::Integer) where {T <: AbstractFloat}
+function __sample_single!(rng::AbstractRNG,  s::ARSampler{T}, n_accepted::Integer, add_segments::Bool, max_segments::Integer) where {T <: AbstractFloat}
+    while true
+        x = sample_hull(rng, s.upper_hull)
+        up = eval_hull(s.upper_hull, x)
+        lo = eval_hull(s.lower_hull, x)
+        w = rand(rng)
+
+        if w <= exp(lo - up)
+            return x
+        elseif w <= exp(s.objective.f(x) - up)
+            if add_segments && n_segments(s) < max_segments
+                add_segment!(s, x)
+            end
+            return x
+        elseif add_segments && n_segments(s) < max_segments
+            add_segment!(s, x)
+        end
+    end
 end
 
 # TODO: Make this prepopulate `out` using `sample_hull!`?
