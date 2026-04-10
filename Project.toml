@@ -10,13 +10,20 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
 [compat]
 Compat = "4.18.1"
 DifferentiationInterface = "0.7"
 ForwardDiff = "1"
+Makie = "0.24.9"
 SpecialFunctions = "2"
 StatsBase = "0.34.10"
 julia = "1"
+
+[extensions]
+MakieExtension = "Makie"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

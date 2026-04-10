@@ -97,6 +97,7 @@ struct UpperHull{T} <: AbstractHull
     intersections::Vector{T}
     abscissae::Vector{T}
     segment_weights::Vector{T}
+    weights_cumsum::Vector{T}
     domain::Tuple{T, T}
 end
 
@@ -110,6 +111,7 @@ line(h::UpperHull, i::Integer) = (h.slopes[i], h.intercepts[i])
 lineinds(h::UpperHull) = 1:(length(slopes(h)))
 n_lines(h::UpperHull) = length(slopes(h))
 segment_weights(h::UpperHull) = h.segment_weights
+weights_cumsum(h::UpperHull) = h.weights_cumsum
 
 """
     eval_hull(h::UpperHull, x)
@@ -202,14 +204,22 @@ Create an `UpperHull` based on the objective function, initial abscissae and its
 function UpperHull(obj::Objective{T}, abscissae::Vector{T}, domain::Tuple{T, T}) where {T}
     slopes, intercepts = calc_slopes_and_intercepts(obj, abscissae)
 
+
     intersects = [domain[1]; calc_intersects(slopes, intercepts); domain[2]]
 
     wgts = Vector{T}(undef, length(slopes))
     for i in 1:length(wgts)
         wgts[i] = exp_integral_line(slopes[i], intercepts[i], intersects[i], intersects[i + 1])
     end
-
-    return UpperHull(intercepts, slopes, intersects, abscissae, wgts, domain)
+    wgts_cumsum = cumsum(wgts)
+    # Sizehinting
+    sizehint!(slopes, 50)
+    sizehint!(intercepts, 50)
+    sizehint!(intersects, 50)
+    sizehint!(wgts, 50)
+    sizehint!(wgts_cumsum, 50)
+    sizehint!(abscissae, 50)
+    return UpperHull(intercepts, slopes, intersects, abscissae, wgts, wgts_cumsum, domain)
 end
 
 # Calculate the inverse CDF of a segment, handling a slope of zero.
@@ -232,9 +242,16 @@ Calculate the inverse cumulative density of a hull segment at `r` based on its..
 end
 
 # Draw a single sample from `h`.
-function sample_hull(rng::AbstractRNG, h::UpperHull)
-    ws = segment_weights(h)
-    ind = sample(rng, AllocFreeWeights(ws, sum(ws)))
+function sample_hull(rng::AbstractRNG, h::UpperHull{T}) where {T}
+    s = weights_cumsum(h)
+    u = rand(rng, T) * s[end]
+    k = length(s)
+
+    ind = 1
+    while u > s[ind] && ind < k
+        ind += 1
+    end
+
     sl, int = line(h, ind)
     return inv_cdf_seg(sl, int, rand(rng), segment_weights(h)[ind], intersections(h)[ind], intersections(h)[ind + 1])
 end
@@ -304,6 +321,10 @@ function LowerHull(upper::UpperHull{T}, obj::Objective{T}) where {T}
     int = Vector{T}(undef, n_segs)
 
     calc_lower_slopes_and_intercepts!(sl, int, intersections, obj.f)
+
+    # Sizehinting
+    sizehint!(sl, 50)
+    sizehint!(int, 50)
 
     return LowerHull(int, sl, intersections)
 end
@@ -434,7 +455,6 @@ end
 Modifies the hulls of `s`, adding a segment with abscissa at `x`.
 """
 function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
-
     # Calculate slope, intercept and index of new segment
     new_slope = s.objective.grad(x)
     new_intercept = (new_slope * -x) + s.objective.f(x)
@@ -445,10 +465,13 @@ function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
     all_slopes = slopes(s.upper_hull)
     all_intercepts = intercepts(s.upper_hull)
     insert!(all_slopes, new_ind, new_slope)
+    # simple_insert!(all_slopes, new_ind, new_slope)
     insert!(all_intercepts, new_ind, new_intercept)
+    # simple_insert!(all_intercepts, new_ind, new_intercept)
 
     # Insert new abscissa
     insert!(abscissae(s.upper_hull), new_ind, x)
+    # simple_insert!(abscissae(s.upper_hull), new_ind, x)
 
     # TODO: Only calculate the intersections and weights that actually change.
     # Recalculate intersection points for segments, given the new segment
@@ -462,6 +485,12 @@ function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
     for i in eachindex(all_weights)
         all_weights[i] = exp_integral_line(all_slopes[i], all_intercepts[i], all_intersections[i], all_intersections[i + 1])
     end
+
+    # Recalculate cumsum of weights
+    w_cumsum = weights_cumsum(s.upper_hull)
+    push!(w_cumsum, zero(T))
+    cumsum!(w_cumsum, all_weights)
+
 
     #= Lower hull time =#
     # We don't need to add anything to the lower intersections as it is the same vector used for abscissae
@@ -480,6 +509,26 @@ function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
     )
 
     return nothing
+end
+
+function __sample_single!(rng::AbstractRNG,  s::ARSampler{T}, n_accepted::Integer, add_segments::Bool, max_segments::Integer) where {T <: AbstractFloat}
+    while true
+        x = sample_hull(rng, s.upper_hull)
+        up = eval_hull(s.upper_hull, x)
+        lo = eval_hull(s.lower_hull, x)
+        w = rand(rng)
+
+        if w <= exp(lo - up)
+            return x
+        elseif w <= exp(s.objective.f(x) - up)
+            if add_segments && n_segments(s) < max_segments
+                add_segment!(s, x)
+            end
+            return x
+        elseif add_segments && n_segments(s) < max_segments
+            add_segment!(s, x)
+        end
+    end
 end
 
 # TODO: Make this prepopulate `out` using `sample_hull!`?
