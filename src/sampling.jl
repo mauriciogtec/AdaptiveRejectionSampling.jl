@@ -455,7 +455,6 @@ end
 Modifies the hulls of `s`, adding a segment with abscissa at `x`.
 """
 function add_segment!(s::ARSampler{T}, x::T) where {T <: AbstractFloat}
-
     # Calculate slope, intercept and index of new segment
     new_slope = s.objective.grad(x)
     new_intercept = (new_slope * -x) + s.objective.f(x)

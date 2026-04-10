@@ -42,7 +42,7 @@ obj = Objective(fn)
 x = 2.4
 
 const f64gen = Data.Floats{Float64}(nans = false)
-const f64genmu = Data.Floats{Float64}(nans = false)
+const f64genmu = Data.Floats{Float64}(nans = false, minimum = -1.0e8, maximum = 1.0e8)
 const f64gensigma = Data.Floats{Float64}(nans = false, minimum = 0.0001)
 
 @testset "Objective" begin
@@ -57,6 +57,25 @@ const f64gensigma = Data.Floats{Float64}(nans = false, minimum = 0.0001)
         o.f(v) ≈ normal_log(v, mu, sigma)
     end
     @test obj.grad(3.14) == 0.0
+end
+
+
+@testset "Truncated" begin
+    f_gamma(x, α, β) = β^α * x^(α - 1) * exp(-β * x) / gamma(α)
+    f_log_gamma(x, α, β) = α * log(β) + (α - 1) * log(x) - β * x - loggamma(α)
+    obj = Objective(x -> f_log_gamma(x, 4, 2))
+    lb = 4.0
+    ub = 8.0
+    sam = ARSampler(obj, (lb, ub), [lb, ub])
+    v = sample!(sam, 10_000)
+    @test all(lb .< v .< ub)
+
+    obj = Objective(x -> f_log_gamma(x, 4, 2))
+    lb = 9.5
+    ub = 10.0
+    sam = ARSampler(obj, (lb, ub), [(lb + ub) / 2])
+    v = sample!(sam, 10_000)
+    @test all(lb .< v .< ub)
 end
 
 
