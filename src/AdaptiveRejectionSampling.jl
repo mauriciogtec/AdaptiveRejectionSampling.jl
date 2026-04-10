@@ -12,5 +12,5 @@ import ForwardDiff
 using Compat
 
 include("sampling.jl")
-
+include("plot.jl")
 end # module AdaptiveRejectionSampling
