@@ -12,43 +12,62 @@ This package is useful for efficient sampling from log-concave univariate densit
 ## Examples
 
 ```julia
-using AdaptiveRejectionSampling
-using Plots
+using AdaptiveRejectionSampling: Objective, ARSampler, sample!, eval_hull, abscissae
+using SpecialFunctions: gamma
+using CairoMakie
 ```
-
 
 ### Sampling from a shifted normal distribution
 
 
 ```julia
-# Define function to be sampled
-μ, σ = 1.0, 2.0
-f(x) = exp(-0.5(x - μ)^2 / σ^2) / sqrt(2pi * σ^2) 
-support = (-Inf, Inf)
+const μ, σ = 1.0, 2.0
 
-# Build the sampler and simulate 10,000 samples
-sampler = RejectionSampler(f, support, max_segments = 5)
-@time sim = run_sampler!(sampler, 10000);
+function bench()
+    # Define function to be sampled
+    f(x) = log(exp(-0.5(x - μ)^2 / σ^2) / sqrt(2pi * σ^2)) 
+    support = (-10., 10.)
+    
+    # Build the sampler and simulate 10,000 samples
+    obj = Objective(f)
+    sampler = ARSampler(obj, support)
+    b = @be deepcopy(sampler) sample!(_, 10000, true, 10);
+return sampler, b
+end
+s, b = bench();
+b
 ```
 
-      0.010434 seconds (192.15 k allocations: 3.173 MiB)
-    
+      Benchmark: 126 samples with 1 evaluation
+      min    616.951 μs (17 allocs: 80.523 KiB)
+      median 641.532 μs (17 allocs: 80.523 KiB)
+      mean   749.812 μs (17.10 allocs: 80.625 KiB, 0.75% gc time)
+      max    13.744 ms (20 allocs: 83.711 KiB, 94.06% gc time)
 
 Let's verify the result
 
 
 ```julia
 # Plot the results and compare to target distribution
+f(x) = log(exp(-0.5(x - μ)^2 / σ^2) / sqrt(2pi * σ^2)) 
 x = range(-10.0, 10.0, length=100)
-envelop = [eval_envelop(sampler.envelop, xi) for xi in x]
-target = [f(xi) for xi in x]
+envelop = eval_hull.(s.upper_hull, x)
+target = f.(x)
+samples = sample!(s, 10000, max_segments = 5)
 
-histogram(sim, normalize = true, label = "Histogram")
-plot!(x, [target envelop], width = 2, label = ["Normal(μ, σ)" "Envelop"])
+fig, ax, p = hist(samples, bins=25, normalization = :pdf, label = "Samples");
+lines!(ax, -10..10, x -> exp(f(x)), label = "Target", color = :orange)
+lines!(ax, x, exp.(envelop), label = "Envelop", color = :black, alpha = 0.8)
+absc = ARS.abscissae(s.upper_hull)
+scatter!(ax, absc, exp.(eval_hull.(s.upper_hull, absc)), label = "Abscissae", color = :red)
+axislegend(ax)
+fig
+# histogram(sim, normalize = true, label = "Histogram")
+# plot!(x, [target envelop], width = 2, label = ["Normal(μ, σ)" "Envelop"])
 ```
 
 
-![](img/example1.png)
+![](img/example1.svg)
 
 
 ### Let's try a Gamma
@@ -59,24 +78,28 @@ plot!(x, [target envelop], width = 2, label = ["Normal(μ, σ)" "Envelop"])
 f(x) = β^α * x^(α-1) * exp(-β*x) / gamma(α)
 support = (0.0, Inf)
 
-# Build the sampler and simulate 10,000 samples
-sampler = RejectionSampler(f, support)
-@time sim = run_sampler!(sampler, 10000) 
+obj = Objective(x -> log(f(x)))
+sam = ARSampler(obj, support)
+@time sim = sample!(sam, 10000, max_segments = 5)
 
-# Plot the results and compare to target distribution
-x = range(0.0, 5.0, length=100)
-envelop = [eval_envelop(sampler.envelop, xi) for xi in x]
-target = [f(xi) for xi in x]
-
-histogram(sim, normalize = true, label = "Histogram")
-plot!(x, [target envelop], width = 2, label = ["Gamma(α, β)" "Envelop"])
+# Verify result
+x = range(0.0, 8.0, length=100)
+envelop = eval_hull.(sam.upper_hull, x)
+target = f.(x)
+mx = maximum(sim)
+fig, ax, p = hist(sim, bins=50, normalization = :pdf, label = "Samples");
+lines!(ax, 0..mx, y -> f(y), label = "Target", color = :orange)
+lines!(ax, 0..mx, y -> exp(eval_hull(sam.upper_hull, y)), label = "Envelop", color = :black, alpha = 0.8)
+absc = abscissae(sam.upper_hull)
+scatter!(ax, absc, exp.(eval_hull.(sam.upper_hull, absc)), label = "Abscissae", color = :red)
+axislegend(ax)
+fig
 ```
 
-      0.007299 seconds (182.00 k allocations: 3.027 MiB)
-    
+      0.000772 seconds (100 allocations: 85.211 KiB)
 
 
-![](img/example2.png)
+![](img/example2.svg)
 
 ### Truncated distributions and unknown normalization constant
 

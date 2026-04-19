@@ -3,14 +3,27 @@ uuid = "c75e803d-635f-53bd-ab7d-544e482d8c75"
 version = "0.2.1"
 
 [deps]
+Compat = "34da2185-b29b-5c13-b0c7-acf172513d20"
+DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
 [compat]
-ForwardDiff = "0.10.1"
-StatsBase = "0.24, 0.34"
-julia = "0.7.0, 1"
+Compat = "4.18.1"
+DifferentiationInterface = "0.7"
+ForwardDiff = "1"
+Makie = "0.24.9"
+SpecialFunctions = "2"
+StatsBase = "0.34.10"
+julia = "1"
+
+[extensions]
+MakieExtension = "Makie"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
