@@ -1,12 +1,11 @@
 module MakieExtension
 using Makie
-import Makie: mixin_colormap_attributes
 using AdaptiveRejectionSampling
 import AdaptiveRejectionSampling: hullplot, hullplot!, eval_hull, abscissae, ARSampler
 
 @recipe Hullplot begin
     abscissae = true
-    target = true
+    target = false
     upper_hull = true
     lower_hull = true
     target_linewidth = @inherit linewidth
