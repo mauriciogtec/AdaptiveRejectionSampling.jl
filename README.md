@@ -171,24 +171,6 @@ hist!(ax2, sim, bins=50, color = :grey, normalization = :pdf, label = "Samples")
 hullplot!(ax2, 0..10, sam, target = true, normconst = 1 / normconst)
 axislegend(ax2)
 fig
-
-sampler = RejectionSampler(logf, support, δ, max_segments=10, logdensity=true, search_range=search, max_slope=10.0)
-@time sim = run_sampler!(sampler, 10000)
-```
-
-
-```julia
-x = range(0, 10, length=200)
-normconst = sum(f.(x)) * (x[2] - x[1])
-envelop = [eval_envelop(sampler.envelop, xi) for xi in x] ./ normconst
-target = [f(xi) for xi in x] ./ normconst
-
-# make two plots of logf and f
-p1 = plot(logf, -20, 20, label = "logf")
-p2 = histogram(sim, normalize=true, label="histogram")
-plot!(p2, x, [target envelop], width=2, label=["target density" "envelop"])
-
-plot(p1, p2, layout = (1, 2))
 ```
 
 ![](img/example5.svg)
