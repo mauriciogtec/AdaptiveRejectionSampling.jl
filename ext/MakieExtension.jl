@@ -15,6 +15,7 @@ import AdaptiveRejectionSampling: hullplot, hullplot!, eval_hull, abscissae, ARS
     upper_hull_label = "Upper hull"
     lower_hull_label = "Lower hull"
     abscissae_label = "Abscissae"
+    normconst = 1
 end
 
 
@@ -26,12 +27,14 @@ function Makie.plot!(p::Hullplot{<:Tuple{<:Any, <:ARSampler}})
     obj = sam.objective
     xs = p[1]
 
+    normconst = p.normconst[]
+
     i = 1
     if p.lower_hull[]
         lines!(
             p,
             xs,
-            x -> exp(eval_hull(lower_hull, x)),
+            x -> normconst * exp(eval_hull(lower_hull, x)),
             color=Cycled(i),
             linewidth = p.lower_hull_linewidth,
             label = p.lower_hull_label
@@ -42,7 +45,7 @@ function Makie.plot!(p::Hullplot{<:Tuple{<:Any, <:ARSampler}})
         lines!(
             p,
             xs,
-            x -> exp(eval_hull(upper_hull, x)),
+            x -> normconst * exp(eval_hull(upper_hull, x)),
             linewidth = p.upper_hull_linewidth,
             color=Cycled(i),
             label = p.upper_hull_label
@@ -53,7 +56,7 @@ function Makie.plot!(p::Hullplot{<:Tuple{<:Any, <:ARSampler}})
         lines!(
             p,
             xs,
-            x -> exp(obj.f(x)),
+            x -> normconst * exp(obj.f(x)),
             color=Cycled(i),
             label = p.target_label,
             linewidth = p.target_linewidth
@@ -61,11 +64,11 @@ function Makie.plot!(p::Hullplot{<:Tuple{<:Any, <:ARSampler}})
         i += 1
     end
     if p.abscissae[]
-        absc = abscissae(upper_hull)
+        absc = filter(in(xs[]), abscissae(upper_hull))
         scatter!(
             p,
             absc,
-            exp.(eval_hull.(upper_hull, absc)),
+            normconst .* exp.(eval_hull.(upper_hull, absc)),
             color = Cycled(i),
             label = p.abscissae_label
         )

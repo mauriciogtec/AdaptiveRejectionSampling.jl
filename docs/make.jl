@@ -27,7 +27,7 @@ makedocs(;
         "References" => "references.md",
     ],
     plugins = [bib],
-    remotes = nothing,
+    repo = Remotes.GitHub("mauriciogtec", "AdaptiveRejectionSampling.jl"),
     checkdocs = :public,
     warnonly = [:missing_docs],
 )
