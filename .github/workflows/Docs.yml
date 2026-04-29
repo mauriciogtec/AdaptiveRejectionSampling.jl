@@ -50,9 +50,9 @@ jobs:
         run: |
           julia --project=docs -e '
             using Documenter: DocMeta, doctest
-            using ARSampling
-            DocMeta.setdocmeta!(ARSampling, :DocTestSetup, :(using ARSampling); recursive=true)
-            doctest(ARSampling)'
+            using AdaptiveRejectionSampling
+            DocMeta.setdocmeta!(AdaptiveRejectionSampling, :DocTestSetup, :(using AdaptiveRejectionSampling); recursive=true)
+            doctest(AdaptiveRejectionSampling)'
       - name: Generate and deploy documentation
         run: julia --project=docs docs/make.jl
         env:

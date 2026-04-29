@@ -112,6 +112,7 @@ lineinds(h::UpperHull) = 1:(length(slopes(h)))
 n_lines(h::UpperHull) = length(slopes(h))
 segment_weights(h::UpperHull) = h.segment_weights
 weights_cumsum(h::UpperHull) = h.weights_cumsum
+domain(h::UpperHull) = h.domain
 
 """
     eval_hull(h::UpperHull, x)
@@ -119,6 +120,10 @@ weights_cumsum(h::UpperHull) = h.weights_cumsum
 Eval hull `h` at `x`.
 """
 function eval_hull(h::UpperHull{T}, x::T) where {T}
+    lb, ub = domain(h)
+    if x < lb || x > ub
+        return -Inf
+    end
     ints = intersections(h)
     i = searchsortedfirst(ints, x) - 1
     i = i == length(ints) + 1 ? i - 1 : i
@@ -369,7 +374,7 @@ Initialize an adaptive rejection sampler over an objective function from `obj` (
 `initial_points` should be a vector defining the abscissae of the initial segments of the sampler.
  At least 2 of the points should be on opposite sides of the objective function's maximum.
 
-If no `initial_points` an attempt to find suitable ones will be made by searching for
+If no `initial_points` are provided an attempt to find suitable ones will be made by searching for
 the first negative/positive slope of `obj`. The default search range is `-10:10` with a
 step of `0.1`.
 

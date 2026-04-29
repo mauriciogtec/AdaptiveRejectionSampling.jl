@@ -12,5 +12,8 @@ import ForwardDiff
 using Compat
 
 include("sampling.jl")
+@compat public Objective, ARSampler, sample!
+
 include("plot.jl")
+@compat public hullplot, hullplot!
 end # module AdaptiveRejectionSampling
