@@ -14,7 +14,7 @@ makedocs(;
     authors = "Mauricio Tec, Elias Sjölin <elias.sjolin@gmail.com> and contributors",
     sitename = "AdaptiveRejectionSampling.jl",
     format = Documenter.HTML(;
-        canonical = "https://mauriciogtec.github.io/AdaptiveRejectionSampling.jl",
+        canonical = "https://juliastats.org/AdaptiveRejectionSampling.jl",
         edit_link = "master",
         assets = ["assets/favicon.ico"],
     ),
@@ -27,9 +27,9 @@ makedocs(;
         "References" => "references.md",
     ],
     plugins = [bib],
-    repo = Remotes.GitHub("mauriciogtec", "AdaptiveRejectionSampling.jl"),
+    repo = Remotes.GitHub("JuliaStats", "AdaptiveRejectionSampling.jl"),
     checkdocs = :public,
     warnonly = [:missing_docs],
 )
 
-deploydocs(; repo = "github.com/mauriciogtec/AdaptiveRejectionSampling.jl")
+deploydocs(; repo = "github.com/JuliaStats/AdaptiveRejectionSampling.jl")
