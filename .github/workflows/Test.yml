@@ -3,8 +3,9 @@ name: Test
 on:
   push:
     branches:
-      - master
-    tags: ["*"]
+      - "**"
+    tags: 
+      - "**"
   workflow_dispatch:
 
 jobs:
@@ -27,9 +28,7 @@ jobs:
         os:
           - ubuntu-latest
           - macOS-latest
-
           - windows-latest
-
         arch:
           - x64
         allow_failure: [false]
